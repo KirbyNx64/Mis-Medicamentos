@@ -369,6 +369,9 @@ class _HomeCalendarScreenState extends State<HomeCalendarScreen> {
         }
       }
       if (firstDoseAt == null) continue;
+      final dayInterval = _dayIntervalFromFrequencyRule(
+        medication['frequency_rule']?.toString(),
+      );
       final endDateRaw = medication['end_date']?.toString().trim();
       final endDate = (endDateRaw == null || endDateRaw.isEmpty)
           ? null
@@ -450,7 +453,7 @@ class _HomeCalendarScreenState extends State<HomeCalendarScreen> {
           entriesByDay.putIfAbsent(day, () => []).add(entry);
         }
         if (totalDoses != null && totalGenerated >= totalDoses) break;
-        cursorDay = cursorDay.add(const Duration(days: 1));
+        cursorDay = cursorDay.add(Duration(days: dayInterval));
       }
     }
 
@@ -1035,6 +1038,15 @@ bool _isValidHourMinute(String value) {
       hour < 24 &&
       minute >= 0 &&
       minute < 60;
+}
+
+int _dayIntervalFromFrequencyRule(String? rawRule) {
+  final rule = (rawRule ?? '').trim().toLowerCase();
+  final match = RegExp(r'^every_(\d+)_days$').firstMatch(rule);
+  if (match == null) return 1;
+  final parsed = int.tryParse(match.group(1) ?? '');
+  if (parsed == null || parsed < 2) return 1;
+  return parsed;
 }
 
 String _dateTimeKey(DateTime dt) {

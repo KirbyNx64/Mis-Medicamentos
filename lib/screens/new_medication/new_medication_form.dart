@@ -12,6 +12,7 @@ enum _FrequencyType {
   every12Hours,
   every8Hours,
   every6Hours,
+  everyNDays,
   custom,
 }
 
@@ -48,6 +49,7 @@ class _NewMedicationFormState extends State<NewMedicationForm>
   final _stockController = TextEditingController();
   final _intakeQuantityController = TextEditingController();
   final _durationDaysController = TextEditingController();
+  final _everyNDaysController = TextEditingController();
   final _customFrequencyController = TextEditingController();
   final _instructionsController = TextEditingController();
   final _imagePicker = ImagePicker();
@@ -104,6 +106,7 @@ class _NewMedicationFormState extends State<NewMedicationForm>
   TimeOfDay _firstDoseTime = const TimeOfDay(hour: 8, minute: 0);
   List<TimeOfDay> _customTimes = [];
   bool _markAsFinished = false;
+  bool _isIndefiniteTreatment = false;
   bool _isSaving = false;
   bool _wasKeyboardOpen = false;
   String? _photoPath;
@@ -136,6 +139,7 @@ class _NewMedicationFormState extends State<NewMedicationForm>
     _stockController.dispose();
     _intakeQuantityController.dispose();
     _durationDaysController.dispose();
+    _everyNDaysController.dispose();
     _customFrequencyController.dispose();
     _instructionsController.dispose();
     super.dispose();
@@ -145,555 +149,674 @@ class _NewMedicationFormState extends State<NewMedicationForm>
   Widget build(BuildContext context) {
     final isEditing = widget.initialMedication != null;
 
-    return Form(
-      key: _formKey,
-      child: Column(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _sectionTitle('Nombre del medicamento'),
-                  const SizedBox(height: 8),
-                  TextFormField(
-                    controller: _nameController,
-                    decoration: _inputDecoration(
-                      'Ej. Paracetamol',
-                      icon: Icons.medication_outlined,
-                    ),
-                    validator: (value) =>
-                        (value == null || value.trim().isEmpty)
-                        ? 'Ingresa un nombre'
-                        : null,
-                  ),
-                  const SizedBox(height: 20),
-                  _sectionTitle('Tipo y vía'),
-                  const SizedBox(height: 8),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue: _selectedForm,
-                          isExpanded: true,
-                          decoration: _inputDecoration('Tipo'),
-                          items: _forms
-                              .map(
-                                (form) => DropdownMenuItem(
-                                  value: form,
-                                  child: Text(form),
-                                ),
-                              )
-                              .toList(),
-                          selectedItemBuilder: (context) {
-                            return _forms
-                                .map(
-                                  (form) => Text(
-                                    form,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                )
-                                .toList();
-                          },
-                          onChanged: (value) {
-                            if (value == null) return;
-                            setState(() {
-                              _selectedForm = value;
-                              _syncCompatibility();
-                            });
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          key: ValueKey(
-                            'route_${_selectedForm}_$_selectedRoute',
-                          ),
-                          initialValue: _selectedRoute,
-                          isExpanded: true,
-                          decoration: _inputDecoration('Vía'),
-                          items: _availableRoutes
-                              .map(
-                                (route) => DropdownMenuItem(
-                                  value: route,
-                                  child: Text(route),
-                                ),
-                              )
-                              .toList(),
-                          selectedItemBuilder: (context) {
-                            return _availableRoutes
-                                .map(
-                                  (route) => Text(
-                                    route,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                )
-                                .toList();
-                          },
-                          onChanged: (value) {
-                            if (value == null) return;
-                            setState(() => _selectedRoute = value);
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  _sectionTitle(_doseSectionTitle),
-                  const SizedBox(height: 8),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _doseController,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          decoration: _inputDecoration(_doseHint),
-                          validator: (value) {
-                            final parsed = double.tryParse(
-                              (value ?? '').replaceAll(',', '.'),
-                            );
-                            return (parsed == null || parsed <= 0)
-                                ? 'Inválida'
-                                : null;
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        flex: 2,
-                        child: DropdownButtonFormField<String>(
-                          key: ValueKey('unit_${_selectedForm}_$_selectedUnit'),
-                          initialValue: _selectedUnit,
-                          isExpanded: true,
-                          decoration: _inputDecoration(_unitFieldLabel),
-                          items: _availableUnits
-                              .map(
-                                (unit) => DropdownMenuItem(
-                                  value: unit,
-                                  child: Text(unit),
-                                ),
-                              )
-                              .toList(),
-                          selectedItemBuilder: (context) {
-                            return _availableUnits
-                                .map(
-                                  (unit) => Text(
-                                    unit,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                )
-                                .toList();
-                          },
-                          onChanged: (value) {
-                            if (value == null) return;
-                            setState(() => _selectedUnit = value);
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (_requiresStockFields || _showsIntakeField) ...[
-                    const SizedBox(height: 20),
-                    _sectionTitle('Cantidad del medicamento'),
+    return Theme(
+      data: Theme.of(context).copyWith(
+        textSelectionTheme: const TextSelectionThemeData(
+          cursorColor: Color(0xFF2F80ED),
+        ),
+      ),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _sectionTitle('Nombre del medicamento'),
                     const SizedBox(height: 8),
-                  ],
-                  if (_requiresStockFields) ...[
                     TextFormField(
-                      controller: _stockController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
+                      controller: _nameController,
+                      decoration: _inputDecoration(
+                        'Ej. Paracetamol',
+                        icon: Icons.medication_outlined,
                       ),
-                      onChanged: (_) => setState(() {}),
-                      decoration: _inputDecoration(_stockTotalHint),
-                      validator: (value) {
-                        final parsed = _parsePositiveNumber(value);
-                        return (parsed == null || parsed <= 0)
-                            ? 'Inválida'
-                            : null;
-                      },
+                      validator: (value) =>
+                          (value == null || value.trim().isEmpty)
+                          ? 'Ingresa un nombre'
+                          : null,
                     ),
-                    const SizedBox(height: 10),
-                    _intakeField(),
-                  ] else if (_showsIntakeField)
-                    _intakeField(),
-                  if (_requiresStockFields || _showsIntakeField)
                     const SizedBox(height: 20),
-                  if (!_requiresStockFields && !_showsIntakeField)
-                    const SizedBox(height: 20),
-                  _sectionTitle('Frecuencia'),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _frequencyButton(
-                          label: 'Cada 24 horas',
-                          selected: _frequency == _FrequencyType.every24Hours,
-                          onTap: () => setState(
-                            () => _frequency = _FrequencyType.every24Hours,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _frequencyButton(
-                          label: 'Cada 12 horas',
-                          selected: _frequency == _FrequencyType.every12Hours,
-                          onTap: () => setState(
-                            () => _frequency = _FrequencyType.every12Hours,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _frequencyButton(
-                          label: 'Cada 8 horas',
-                          selected: _frequency == _FrequencyType.every8Hours,
-                          onTap: () => setState(
-                            () => _frequency = _FrequencyType.every8Hours,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _frequencyButton(
-                          label: 'Cada 6 horas',
-                          selected: _frequency == _FrequencyType.every6Hours,
-                          onTap: () => setState(
-                            () => _frequency = _FrequencyType.every6Hours,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  TextFormField(
-                    readOnly: true,
-                    onTap: () =>
-                        setState(() => _frequency = _FrequencyType.custom),
-                    decoration:
-                        _inputDecoration(
-                          'Personalizar horas...',
-                          icon: Icons.schedule_send_outlined,
-                        ).copyWith(
-                          suffixIcon: const Icon(
-                            Icons.edit_calendar_outlined,
-                            color: Color(0xFF8BA0BC),
-                          ),
-                        ),
-                  ),
-                  if (_frequency == _FrequencyType.custom) ...[
+                    _sectionTitle('Tipo y vía'),
                     const SizedBox(height: 8),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF6FAFF),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFD9E2EE)),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: _customTimes.isEmpty
-                                ? const [
-                                    Text(
-                                      'Aun no hay horas personalizadas.',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Color(0xFF5E6F87),
-                                        fontWeight: FontWeight.w600,
-                                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: _selectedForm,
+                            isExpanded: true,
+                            decoration: _inputDecoration('Tipo'),
+                            items: _forms
+                                .map(
+                                  (form) => DropdownMenuItem(
+                                    value: form,
+                                    child: Text(form),
+                                  ),
+                                )
+                                .toList(),
+                            selectedItemBuilder: (context) {
+                              return _forms
+                                  .map(
+                                    (form) => Text(
+                                      form,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
-                                  ]
-                                : List.generate(_customTimes.length, (index) {
-                                    final time = _customTimes[index];
-                                    return InputChip(
-                                      label: Text(_formatTime(time)),
-                                      onDeleted: () =>
-                                          _removeCustomTimeAt(index),
-                                      deleteIcon: const Icon(
-                                        Icons.close,
-                                        size: 16,
-                                      ),
-                                    );
-                                  }),
-                          ),
-                          const SizedBox(height: 10),
-                          OutlinedButton.icon(
-                            onPressed: _pickCustomTime,
-                            icon: const Icon(Icons.add_alarm),
-                            label: const Text('Agregar hora'),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    TextFormField(
-                      controller: _customFrequencyController,
-                      decoration: _inputDecoration(
-                        'Nota de frecuencia (opcional)',
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 20),
-                  _sectionTitle('Primera dosis'),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: InkWell(
-                          onTap: _pickFirstDoseDate,
-                          borderRadius: BorderRadius.circular(12),
-                          child: InputDecorator(
-                            decoration: _inputDecoration('').copyWith(
-                              suffixIcon: const Icon(
-                                Icons.calendar_today_outlined,
-                                color: Color(0xFF8BA0BC),
-                              ),
-                            ),
-                            child: Text(
-                              _formatDate(_firstDoseDate),
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
+                                  )
+                                  .toList();
+                            },
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _selectedForm = value;
+                                _syncCompatibility();
+                              });
+                            },
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: InkWell(
-                          onTap: _pickTime,
-                          borderRadius: BorderRadius.circular(12),
-                          child: InputDecorator(
-                            decoration: _inputDecoration('').copyWith(
-                              suffixIcon: const Icon(
-                                Icons.access_time,
-                                color: Color(0xFF8BA0BC),
-                              ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            key: ValueKey(
+                              'route_${_selectedForm}_$_selectedRoute',
                             ),
-                            child: Text(
-                              _formatTimeWithMeridiem(_firstDoseTime),
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
+                            initialValue: _selectedRoute,
+                            isExpanded: true,
+                            decoration: _inputDecoration('Vía'),
+                            items: _availableRoutes
+                                .map(
+                                  (route) => DropdownMenuItem(
+                                    value: route,
+                                    child: Text(route),
+                                  ),
+                                )
+                                .toList(),
+                            selectedItemBuilder: (context) {
+                              return _availableRoutes
+                                  .map(
+                                    (route) => Text(
+                                      route,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  )
+                                  .toList();
+                            },
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() => _selectedRoute = value);
+                            },
                           ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (_showsDurationDaysField) ...[
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _durationDaysController,
-                      keyboardType: TextInputType.number,
-                      decoration: _inputDecoration(
-                        'Días de tratamiento (ej. 7)',
-                        icon: Icons.timelapse_outlined,
-                      ),
-                      validator: (value) {
-                        if (!_showsDurationDaysField) return null;
-                        final parsed = int.tryParse((value ?? '').trim());
-                        return (parsed == null || parsed <= 0)
-                            ? 'Ingresa días válidos'
-                            : null;
-                      },
-                    ),
-                  ],
-                  const SizedBox(height: 20),
-                  _sectionTitle('Instrucciones (opcional)'),
-                  const SizedBox(height: 8),
-                  TextFormField(
-                    controller: _instructionsController,
-                    minLines: 3,
-                    maxLines: 5,
-                    textInputAction: TextInputAction.newline,
-                    decoration: _inputDecoration(
-                      'Ej. Tomar después de comer y con agua.',
-                      icon: Icons.notes_outlined,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  _sectionTitle('Foto del medicamento (opcional)'),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _pickMedicationPhoto,
-                          icon: const Icon(Icons.photo_library_outlined),
-                          label: const Text('Seleccionar foto'),
-                        ),
-                      ),
-                      if (_photoPath != null) ...[
-                        const SizedBox(width: 8),
-                        TextButton.icon(
-                          onPressed: _removeMedicationPhoto,
-                          icon: const Icon(Icons.delete_outline),
-                          label: const Text('Quitar'),
                         ),
                       ],
-                    ],
-                  ),
-                  if (_photoPath != null) ...[
+                    ),
+                    const SizedBox(height: 20),
+                    _sectionTitle(_doseSectionTitle),
                     const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        File(_photoPath!),
-                        height: 140,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            height: 60,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF6FAFF),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: const Color(0xFFD9E2EE),
-                              ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _doseController,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
                             ),
-                            child: const Text(
-                              'No se pudo cargar la foto seleccionada.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Color(0xFF5E6F87),
-                              ),
+                            decoration: _inputDecoration(_doseHint),
+                            validator: (value) {
+                              final parsed = double.tryParse(
+                                (value ?? '').replaceAll(',', '.'),
+                              );
+                              return (parsed == null || parsed <= 0)
+                                  ? 'Inválida'
+                                  : null;
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          flex: 2,
+                          child: DropdownButtonFormField<String>(
+                            key: ValueKey(
+                              'unit_${_selectedForm}_$_selectedUnit',
                             ),
-                          );
+                            initialValue: _selectedUnit,
+                            isExpanded: true,
+                            decoration: _inputDecoration(_unitFieldLabel),
+                            items: _availableUnits
+                                .map(
+                                  (unit) => DropdownMenuItem(
+                                    value: unit,
+                                    child: Text(unit),
+                                  ),
+                                )
+                                .toList(),
+                            selectedItemBuilder: (context) {
+                              return _availableUnits
+                                  .map(
+                                    (unit) => Text(
+                                      unit,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  )
+                                  .toList();
+                            },
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() => _selectedUnit = value);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_requiresStockFields || _showsIntakeField) ...[
+                      const SizedBox(height: 20),
+                      _sectionTitle('Cantidad del medicamento'),
+                      const SizedBox(height: 8),
+                    ],
+                    if (_requiresStockFields) ...[
+                      TextFormField(
+                        controller: _stockController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        onChanged: (_) => setState(() {}),
+                        decoration: _inputDecoration(_stockTotalHint),
+                        validator: (value) {
+                          if (_isIndefiniteTreatment) return null;
+                          final parsed = _parsePositiveNumber(value);
+                          return (parsed == null || parsed <= 0)
+                              ? 'Inválida'
+                              : null;
                         },
                       ),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  if (isEditing) ...[
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF4F7FB),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFFD9E2EE)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Estado del medicamento',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800,
-                                    color: Color(0xFF1A2740),
+                      const SizedBox(height: 10),
+                      _intakeField(),
+                    ] else if (_showsIntakeField)
+                      _intakeField(),
+                    if (_requiresStockFields || _showsIntakeField)
+                      const SizedBox(height: 20),
+                    if (!_requiresStockFields && !_showsIntakeField)
+                      const SizedBox(height: 20),
+                    if (_requiresStockFields || _showsDurationDaysField) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF4F7FB),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFFD9E2EE)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Tratamiento de por vida',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
+                                      color: Color(0xFF1A2740),
+                                    ),
                                   ),
-                                ),
-                                SizedBox(height: 2),
-                                Text(
-                                  'Marcar como finalizado',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: Color(0xFF5E6F87),
+                                  SizedBox(height: 2),
+                                  Text(
+                                    'No requiere duración ni cantidad total',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Color(0xFF5E6F87),
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                          Switch(
-                            activeThumbColor: Colors.white,
-                            activeTrackColor: const Color(0xFF2F80ED),
-                            value: _markAsFinished,
-                            onChanged: (value) =>
-                                setState(() => _markAsFinished = value),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 20),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.only(top: 10, bottom: 4),
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: Color(0xFFE5ECF4))),
-            ),
-            child: isEditing
-                ? Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _isSaving ? null : _deleteMedication,
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFD93B3B),
-                            side: const BorderSide(color: Color(0xFFF3B3B3)),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                          icon: const Icon(Icons.delete_outline),
-                          label: const Text('Eliminar'),
+                            Switch(
+                              activeThumbColor: Colors.white,
+                              activeTrackColor: const Color(0xFF2F80ED),
+                              value: _isIndefiniteTreatment,
+                              onChanged: (value) {
+                                setState(() {
+                                  _isIndefiniteTreatment = value;
+                                  if (value) {
+                                    _stockController.clear();
+                                    _durationDaysController.clear();
+                                  }
+                                });
+                              },
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: _isSaving ? null : _saveMedication,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF2F80ED),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            textStyle: const TextStyle(
-                              fontWeight: FontWeight.w700,
+                      const SizedBox(height: 20),
+                    ],
+                    _sectionTitle('Frecuencia'),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _frequencyButton(
+                            label: 'Cada 24 horas',
+                            selected: _frequency == _FrequencyType.every24Hours,
+                            onTap: () => setState(
+                              () => _frequency = _FrequencyType.every24Hours,
                             ),
                           ),
-                          child: Text(
-                            _isSaving ? 'Guardando...' : 'Guardar cambios',
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _frequencyButton(
+                            label: 'Cada 12 horas',
+                            selected: _frequency == _FrequencyType.every12Hours,
+                            onTap: () => setState(
+                              () => _frequency = _FrequencyType.every12Hours,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _frequencyButton(
+                            label: 'Cada 8 horas',
+                            selected: _frequency == _FrequencyType.every8Hours,
+                            onTap: () => setState(
+                              () => _frequency = _FrequencyType.every8Hours,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _frequencyButton(
+                            label: 'Cada 6 horas',
+                            selected: _frequency == _FrequencyType.every6Hours,
+                            onTap: () => setState(
+                              () => _frequency = _FrequencyType.every6Hours,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _frequencyButton(
+                            label: 'Cada N días',
+                            selected: _frequency == _FrequencyType.everyNDays,
+                            onTap: () => setState(
+                              () => _frequency = _FrequencyType.everyNDays,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _frequencyButton(
+                            label: 'Horas personalizadas',
+                            selected: _frequency == _FrequencyType.custom,
+                            onTap: () => setState(
+                              () => _frequency = _FrequencyType.custom,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (_frequency == _FrequencyType.everyNDays) ...[
+                      TextFormField(
+                        controller: _everyNDaysController,
+                        keyboardType: TextInputType.number,
+                        decoration: _inputDecoration(
+                          'Cada cuántos días (mínimo 2)',
+                          icon: Icons.event_repeat_outlined,
+                        ),
+                        validator: (value) {
+                          if (_frequency != _FrequencyType.everyNDays) {
+                            return null;
+                          }
+                          final parsed = int.tryParse((value ?? '').trim());
+                          if (parsed == null || parsed < 2) {
+                            return 'Ingresa un número válido (>= 2)';
+                          }
+                          return null;
+                        },
+                      ),
+                    ],
+                    if (_frequency == _FrequencyType.custom) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF6FAFF),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFD9E2EE)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: _customTimes.isEmpty
+                                  ? const [
+                                      Text(
+                                        'Aun no hay horas personalizadas.',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFF5E6F87),
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ]
+                                  : List.generate(_customTimes.length, (index) {
+                                      final time = _customTimes[index];
+                                      return InputChip(
+                                        label: Text(_formatTime(time)),
+                                        onDeleted: () =>
+                                            _removeCustomTimeAt(index),
+                                        deleteIcon: const Icon(
+                                          Icons.close,
+                                          size: 16,
+                                        ),
+                                      );
+                                    }),
+                            ),
+                            const SizedBox(height: 10),
+                            OutlinedButton.icon(
+                              onPressed: _pickCustomTime,
+                              icon: const Icon(Icons.add_alarm),
+                              label: const Text('Agregar hora'),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        controller: _customFrequencyController,
+                        decoration: _inputDecoration(
+                          'Nota de frecuencia (opcional)',
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 20),
+                    _sectionTitle('Primera dosis'),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: InkWell(
+                            onTap: _pickFirstDoseDate,
+                            borderRadius: BorderRadius.circular(12),
+                            child: InputDecorator(
+                              decoration: _inputDecoration('').copyWith(
+                                suffixIcon: const Icon(
+                                  Icons.calendar_today_outlined,
+                                  color: Color(0xFF8BA0BC),
+                                ),
+                              ),
+                              child: Text(
+                                _formatDate(_firstDoseDate),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: InkWell(
+                            onTap: _pickTime,
+                            borderRadius: BorderRadius.circular(12),
+                            child: InputDecorator(
+                              decoration: _inputDecoration('').copyWith(
+                                suffixIcon: const Icon(
+                                  Icons.access_time,
+                                  color: Color(0xFF8BA0BC),
+                                ),
+                              ),
+                              child: Text(
+                                _formatTimeWithMeridiem(_firstDoseTime),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_showsDurationDaysField && !_isIndefiniteTreatment) ...[
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _durationDaysController,
+                        keyboardType: TextInputType.number,
+                        decoration: _inputDecoration(
+                          'Días de tratamiento (ej. 7)',
+                          icon: Icons.timelapse_outlined,
+                        ),
+                        validator: (value) {
+                          if (!_showsDurationDaysField) return null;
+                          final parsed = int.tryParse((value ?? '').trim());
+                          return (parsed == null || parsed <= 0)
+                              ? 'Ingresa días válidos'
+                              : null;
+                        },
+                      ),
+                    ],
+                    if (_showsDurationDaysField && _isIndefiniteTreatment) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF6FAFF),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFD9E2EE)),
+                        ),
+                        child: const Text(
+                          'Duración no definida por tratarse de un tratamiento de por vida.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF5E6F87),
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
                     ],
-                  )
-                : SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: _isSaving ? null : _saveMedication,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF2F80ED),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        textStyle: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      child: Text(
-                        _isSaving ? 'Guardando...' : 'Guardar medicamento',
+                    const SizedBox(height: 20),
+                    _sectionTitle('Instrucciones (opcional)'),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: _instructionsController,
+                      minLines: 3,
+                      maxLines: 5,
+                      textInputAction: TextInputAction.newline,
+                      decoration: _inputDecoration(
+                        'Ej. Tomar después de comer y con agua.',
+                        icon: Icons.notes_outlined,
                       ),
                     ),
-                  ),
-          ),
-        ],
+                    const SizedBox(height: 16),
+                    _sectionTitle('Foto del medicamento (opcional)'),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _pickMedicationPhoto,
+                            icon: const Icon(Icons.photo_library_outlined),
+                            label: const Text('Seleccionar foto'),
+                          ),
+                        ),
+                        if (_photoPath != null) ...[
+                          const SizedBox(width: 8),
+                          TextButton.icon(
+                            onPressed: _removeMedicationPhoto,
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Quitar'),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (_photoPath != null) ...[
+                      const SizedBox(height: 8),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.file(
+                          File(_photoPath!),
+                          height: 140,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              height: 60,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF6FAFF),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: const Color(0xFFD9E2EE),
+                                ),
+                              ),
+                              child: const Text(
+                                'No se pudo cargar la foto seleccionada.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF5E6F87),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    if (isEditing) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF4F7FB),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFFD9E2EE)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Estado del medicamento',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
+                                      color: Color(0xFF1A2740),
+                                    ),
+                                  ),
+                                  SizedBox(height: 2),
+                                  Text(
+                                    'Marcar como finalizado',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Color(0xFF5E6F87),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              activeThumbColor: Colors.white,
+                              activeTrackColor: const Color(0xFF2F80ED),
+                              value: _markAsFinished,
+                              onChanged: (value) =>
+                                  setState(() => _markAsFinished = value),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.only(top: 10, bottom: 4),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: Color(0xFFE5ECF4))),
+              ),
+              child: isEditing
+                  ? Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _isSaving ? null : _deleteMedication,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFFD93B3B),
+                              side: const BorderSide(color: Color(0xFFF3B3B3)),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                            ),
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Eliminar'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: _isSaving ? null : _saveMedication,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF2F80ED),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              textStyle: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            child: Text(
+                              _isSaving ? 'Guardando...' : 'Guardar cambios',
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: _isSaving ? null : _saveMedication,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF2F80ED),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          textStyle: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        child: Text(
+                          _isSaving ? 'Guardando...' : 'Guardar medicamento',
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -747,6 +870,15 @@ class _NewMedicationFormState extends State<NewMedicationForm>
       _frequency = _FrequencyType.every8Hours;
     } else if (frequencyRule == 'every_6_hours') {
       _frequency = _FrequencyType.every6Hours;
+    } else if (RegExp(r'^every_(\d+)_days$').hasMatch(frequencyRule)) {
+      final match = RegExp(r'^every_(\d+)_days$').firstMatch(frequencyRule);
+      final everyNDays = int.tryParse(match?.group(1) ?? '');
+      if (everyNDays != null && everyNDays >= 2) {
+        _frequency = _FrequencyType.everyNDays;
+        _everyNDaysController.text = everyNDays.toString();
+      } else {
+        _frequency = _FrequencyType.every24Hours;
+      }
     } else if (frequencyRule.startsWith('custom_times')) {
       _frequency = _FrequencyType.custom;
       final separatorIndex = frequencyRule.indexOf(':');
@@ -762,6 +894,7 @@ class _NewMedicationFormState extends State<NewMedicationForm>
 
     _markAsFinished =
         (medication['status']?.toString() ?? 'active') != 'active';
+    _isIndefiniteTreatment = (medication['indefinite'] as num?)?.toInt() == 1;
 
     final firstDoseAtRaw = medication['first_dose_at']?.toString().trim();
     final firstDoseAt = (firstDoseAtRaw == null || firstDoseAtRaw.isEmpty)
@@ -1151,10 +1284,7 @@ class _NewMedicationFormState extends State<NewMedicationForm>
   }
 
   Future<void> _pickTime() async {
-    final selected = await showTimePicker(
-      context: context,
-      initialTime: _firstDoseTime,
-    );
+    final selected = await _showAmPmTimePicker(initialTime: _firstDoseTime);
     if (selected == null) return;
     setState(() => _firstDoseTime = selected);
   }
@@ -1175,8 +1305,7 @@ class _NewMedicationFormState extends State<NewMedicationForm>
   }
 
   Future<void> _pickCustomTime() async {
-    final selected = await showTimePicker(
-      context: context,
+    final selected = await _showAmPmTimePicker(
       initialTime: _customTimes.isEmpty ? _firstDoseTime : _customTimes.last,
     );
     if (selected == null) return;
@@ -1191,6 +1320,25 @@ class _NewMedicationFormState extends State<NewMedicationForm>
         );
       }
     });
+  }
+
+  Future<TimeOfDay?> _showAmPmTimePicker({required TimeOfDay initialTime}) {
+    return showTimePicker(
+      context: context,
+      initialTime: initialTime,
+      builder: (context, child) {
+        if (child == null) return const SizedBox.shrink();
+        final media = MediaQuery.of(context);
+        return Localizations.override(
+          context: context,
+          locale: const Locale('en', 'US'),
+          child: MediaQuery(
+            data: media.copyWith(alwaysUse24HourFormat: false),
+            child: child,
+          ),
+        );
+      },
+    );
   }
 
   void _removeCustomTimeAt(int index) {
@@ -1214,7 +1362,7 @@ class _NewMedicationFormState extends State<NewMedicationForm>
       final intakeQuantity = _showsIntakeField
           ? _parsePositiveNumber(_intakeQuantityController.text)!
           : 1.0;
-      final stock = _requiresStockFields
+      final stock = _requiresStockFields && !_isIndefiniteTreatment
           ? _parsePositiveNumber(_stockController.text)
           : null;
       final existingCurrent =
@@ -1224,8 +1372,8 @@ class _NewMedicationFormState extends State<NewMedicationForm>
           : (editingId != null
                 ? (existingCurrent ?? stock).clamp(0.0, stock)
                 : stock);
-      final durationDays = _showsDurationDaysField
-          ? int.parse(_durationDaysController.text.trim())
+      final durationDays = _showsDurationDaysField && !_isIndefiniteTreatment
+          ? int.tryParse(_durationDaysController.text.trim())
           : null;
       final endDate = durationDays == null
           ? null
@@ -1252,7 +1400,7 @@ class _NewMedicationFormState extends State<NewMedicationForm>
         'reminder_vibration': 1,
         'start_date': _toIsoDate(_firstDoseDate),
         'end_date': endDate == null ? null : _toIsoDate(endDate),
-        'indefinite': durationDays == null ? 1 : 0,
+        'indefinite': _isIndefiniteTreatment ? 1 : 0,
         'first_dose_at': _firstDoseAtIso(),
         'status': _markAsFinished ? 'finished' : 'active',
       };
@@ -1302,6 +1450,11 @@ class _NewMedicationFormState extends State<NewMedicationForm>
 
       if (editingId != null && _markAsFinished) {
         await NotificationsService.instance.showMedicationFinished(
+          medicationName: medicationName,
+          medicationForm: _selectedForm,
+        );
+      } else if (editingId != null) {
+        await NotificationsService.instance.showMedicationUpdated(
           medicationName: medicationName,
           medicationForm: _selectedForm,
         );
@@ -1365,7 +1518,19 @@ class _NewMedicationFormState extends State<NewMedicationForm>
 
     setState(() => _isSaving = true);
     try {
+      final initialName = widget.initialMedication?['name']?.toString().trim();
+      final medicationName = _nameController.text.trim().isNotEmpty
+          ? _nameController.text.trim()
+          : (initialName == null || initialName.isEmpty)
+          ? 'Medicamento'
+          : initialName;
       await AppDatabase.instance.deleteMedication(editingId);
+      await NotificationsService.instance.showMedicationDeleted(
+        medicationName: medicationName,
+        medicationForm: _selectedForm,
+      );
+      await NotificationsService.instance
+          .syncTodayDoseNotificationsFromDatabase();
       if (!mounted) return;
       if (widget.closeOnSave) {
         Navigator.of(context).pop('deleted');
@@ -1457,6 +1622,9 @@ class _NewMedicationFormState extends State<NewMedicationForm>
         return 'every_8_hours';
       case _FrequencyType.every6Hours:
         return 'every_6_hours';
+      case _FrequencyType.everyNDays:
+        final everyNDays = int.tryParse(_everyNDaysController.text.trim()) ?? 2;
+        return 'every_${everyNDays < 2 ? 2 : everyNDays}_days';
       case _FrequencyType.custom:
         final note = _customFrequencyController.text.trim();
         return note.isEmpty ? 'custom_times' : 'custom_times:$note';
@@ -1483,6 +1651,8 @@ class _NewMedicationFormState extends State<NewMedicationForm>
           4,
           (index) => _toHourMinute((minutes + (index * 360)) % 1440),
         );
+      case _FrequencyType.everyNDays:
+        return [_toHourMinute(minutes)];
       case _FrequencyType.custom:
         if (_customTimes.isEmpty) return [_toHourMinute(minutes)];
         return _customTimes.map(_toHourMinuteFromTimeOfDay).toList();

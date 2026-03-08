@@ -140,7 +140,9 @@ class _HomeUpcomingDosesSectionState extends State<HomeUpcomingDosesSection> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
-            child: Center(child: CircularProgressIndicator()),
+            child: Center(
+              child: CircularProgressIndicator(color: Color(0xFF2F80ED)),
+            ),
           );
         }
 
@@ -272,6 +274,9 @@ class _HomeUpcomingDosesSectionState extends State<HomeUpcomingDosesSection> {
         }
       }
       if (firstDoseAt == null) continue;
+      final dayInterval = _dayIntervalFromFrequencyRule(
+        medication['frequency_rule']?.toString(),
+      );
       final endDateRaw = medication['end_date']?.toString().trim();
       final endDate = (endDateRaw == null || endDateRaw.isEmpty)
           ? null
@@ -300,6 +305,18 @@ class _HomeUpcomingDosesSectionState extends State<HomeUpcomingDosesSection> {
           minute ~/ 60,
           minute % 60,
         );
+        final scheduledDay = DateTime(
+          scheduledAt.year,
+          scheduledAt.month,
+          scheduledAt.day,
+        );
+        final firstDay = DateTime(
+          firstDoseAt.year,
+          firstDoseAt.month,
+          firstDoseAt.day,
+        );
+        final dayDiff = scheduledDay.difference(firstDay).inDays;
+        if (dayDiff < 0 || dayDiff % dayInterval != 0) continue;
         if (scheduledAt.isBefore(firstDoseAt)) continue;
         if (endDateExclusive != null &&
             !scheduledAt.isBefore(endDateExclusive)) {
@@ -311,6 +328,7 @@ class _HomeUpcomingDosesSectionState extends State<HomeUpcomingDosesSection> {
             scheduleMinutes: scheduleMinutes,
             firstDoseAt: firstDoseAt,
             scheduledAt: scheduledAt,
+            dayInterval: dayInterval,
           );
           if (ordinal > totalDoses) continue;
         }
@@ -811,6 +829,7 @@ int _doseOrdinalForSchedule({
   required List<int> scheduleMinutes,
   required DateTime firstDoseAt,
   required DateTime scheduledAt,
+  required int dayInterval,
 }) {
   final firstDay = DateTime(
     firstDoseAt.year,
@@ -832,19 +851,30 @@ int _doseOrdinalForSchedule({
       .length;
   final dosesPerFullDay = scheduleMinutes.length;
   final dayDiff = currentDay.difference(firstDay).inDays;
+  if (dayDiff % dayInterval != 0) return 0;
+  final intervalIndex = dayDiff ~/ dayInterval;
 
-  if (dayDiff == 0) {
+  if (intervalIndex == 0) {
     return scheduleMinutes
         .where((m) => m >= firstDoseMinute && m <= currentMinute)
         .length;
   }
 
   final dosesBeforeCurrentDay =
-      dosesOnFirstDay + ((dayDiff - 1) * dosesPerFullDay);
+      dosesOnFirstDay + ((intervalIndex - 1) * dosesPerFullDay);
   final dosesOnCurrentDayUntilNow = scheduleMinutes
       .where((m) => m <= currentMinute)
       .length;
   return dosesBeforeCurrentDay + dosesOnCurrentDayUntilNow;
+}
+
+int _dayIntervalFromFrequencyRule(String? rawRule) {
+  final rule = (rawRule ?? '').trim().toLowerCase();
+  final match = RegExp(r'^every_(\d+)_days$').firstMatch(rule);
+  if (match == null) return 1;
+  final parsed = int.tryParse(match.group(1) ?? '');
+  if (parsed == null || parsed < 2) return 1;
+  return parsed;
 }
 
 String _dateTimeKey(DateTime dt) {

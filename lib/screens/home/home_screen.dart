@@ -74,6 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: HomeAppBar(),
       body: RefreshIndicator(
+        color: const Color(0xFF2F80ED),
         onRefresh: _refreshHome,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),

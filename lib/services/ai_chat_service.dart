@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:intl/intl.dart';
 import 'package:mis_medicamentos/db/local/medications_db.dart';
 import 'package:mis_medicamentos/services/notifications_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AiChatService {
   AiChatService._();
@@ -19,13 +21,29 @@ class AiChatService {
     'GROQ_VISION_MODEL',
     defaultValue: '',
   );
-  static const _apiKey = String.fromEnvironment('GROQ_API_KEY');
+  static const _appApiKey = String.fromEnvironment('GROQ_API_KEY');
   static const _chatCompletionsUrl =
       'https://api.groq.com/openai/v1/chat/completions';
+  static const _prefUsePersonalApiKey = 'ai.use_personal_api_key';
+  static const _prefPersonalApiKey = 'ai.personal_api_key';
   static const _systemInstruction =
       'Eres un asistente de medicamentos en español. '
       'Ayuda a organizar horarios de toma y explica con claridad. '
       'También ayuda al usuario cuando tenga dudas sobre dosis, forma de uso, horarios, olvidos de dosis y precauciones generales. '
+      'Además, responde dudas de uso de la app con pasos claros y breves: cómo agendar un medicamento manualmente, cómo editarlo, cómo eliminarlo, dónde ver todos los medicamentos y cómo marcarlo como finalizado. '
+      'Cuando una duda sea de navegación dentro de la app, responde con instrucciones paso a paso orientadas a pantallas y botones. '
+      'Mapa de navegación de esta app: en la barra inferior existen Inicio, Medicina, Historial y Ajustes. '
+      'Para ver todos los medicamentos: abrir pestaña Medicina (lista con tabs Activos y Finalizados). '
+      'Para crear manualmente: en Medicina tocar el botón + flotante, se abre Nuevo medicamento, completar formulario y tocar Guardar medicamento. '
+      'Para editar: en Medicina, en la tarjeta del medicamento tocar botón de editar (ícono lápiz), cambiar datos y tocar Guardar cambios. '
+      'Para eliminar: abrir editar medicamento y tocar Eliminar. '
+      'Para marcar como finalizado: abrir editar medicamento y activar el switch Marcar como finalizado, luego Guardar cambios; también se puede mover entre tabs Activos/Finalizados en Medicina para verificar el estado. '
+      'Para ver detalles: en la tarjeta del medicamento tocar Ver Detalles. '
+      'Para marcar una dosis como tomada/aplicada/completada desde Inicio: en la sección Próximas, tocar la tarjeta de la dosis y confirmar la acción cuando aparezca el botón de confirmar. '
+      'Para marcar una dosis desde Calendario: en Inicio tocar Ver calendario, seleccionar el día, tocar la dosis y confirmar. '
+      'Para revisar avance diario: en Inicio, usar la tarjeta Progreso de hoy (barra de progreso) que muestra porcentaje y tomas completadas del día. '
+      'Para ver historial de notificaciones: abrir la pestaña Historial (muestra el historial de notificaciones). '
+      'En Ajustes se puede iniciar sesión con Google (cuenta personal) para sincronizar/guardar datos en la nube, activar o desactivar recordatorios, cambiar tono de notificación y eliminar datos de la app. '
       'Si falta contexto para responder, pide datos concretos antes de sugerir. '
       'No des diagnosticos ni sustituyas al medico. '
       'Para casos de riesgo, embarazo, lactancia, alergias, interacciones graves o sintomas intensos, recomienda consultar a un profesional de salud. '
@@ -35,20 +53,28 @@ class AiChatService {
       'Si el usuario ya proporcionó un dato, no lo vuelvas a pedir; solicita únicamente los faltantes. '
       'Usa solo estas formas farmacéuticas válidas: Tableta, Cápsula, Jarabe, Inyección, Gotas, Crema, Polvo, Spray, Inhalador, Parche, Supositorio. '
       'Antes de agendar, solicita siempre fecha y hora de la primera dosis. '
+      'También puedes programar frecuencias como "cada 2 días" usando la regla every_n_days. '
       'Para tipos como jarabe, crema, gotas, spray o inhalador, solicita dias de tratamiento '
       'antes de agendar para poder calcular fecha de finalizacion. '
       'Para tabletas, cápsulas, polvos, inyecciones, parches y supositorios, '
-      'solicita cuantas unidades totales tiene la persona para agendar correctamente. '
+      'solicita cuantas unidades totales tiene la persona para agendar correctamente, '
+      'excepto si el usuario indica que es un tratamiento de por vida/sin cantidad total definida. '
       'No uses la palabra "stock"; usa frases como "cantidad total" o "cuántas unidades tienes". '
       'No pidas al usuario que redacte instrucciones. Las instrucciones finales del medicamento deben ser redactadas por la IA. '
       'Si el usuario brinda una indicación adicional, intégrala en las instrucciones generadas. '
+      'Si el usuario lo pide, también puedes editar o eliminar medicamentos existentes usando las funciones disponibles. '
+      'Si el usuario desea marcar una toma como completada, primero usa la función para listar pendientes de hoy, muestra las opciones con número y luego marca solo la opción que el usuario elija. '
       'Si el usuario pide agendar, pide datos faltantes de forma breve. '
       'Cuando ya tengas datos suficientes para guardar, llama la función '
       '`agendar_medicamento`.';
 
   final List<Map<String, Object?>> _history = [];
   final List<DateTime> _recentRequestTimestamps = [];
+  final Map<int, _PendingDoseOption> _pendingDoseOptionsById = {};
   String _activeModelName = _configuredModelName;
+  bool _preferencesLoaded = false;
+  bool _usePersonalApiKey = false;
+  String _personalApiKey = '';
   DateTime? _quotaBlockedUntil;
   static const _maxHistoryEntries = 18;
   static const _requestWindow = Duration(minutes: 1);
@@ -72,6 +98,7 @@ class AiChatService {
     Uint8List? imageBytes,
     String? imageMimeType,
   }) async {
+    await _loadPreferencesIfNeeded();
     final now = DateTime.now();
     _cleanRecentRequests(now);
 
@@ -88,9 +115,10 @@ class AiChatService {
     }
 
     _recentRequestTimestamps.add(now);
-    if (_apiKey.trim().isEmpty) {
+    final selectedApiKey = _selectedApiKey;
+    if (selectedApiKey.isEmpty) {
       return 'Falta configurar la API key de Groq. Inicia la app con '
-          '--dart-define=GROQ_API_KEY=TU_API_KEY';
+          '--dart-define=GROQ_API_KEY=TU_API_KEY o guarda tu API key personal en Ajustes.';
     }
     _activeModelName = _activeModelName.trim();
     if (_activeModelName.trim().isEmpty) {
@@ -100,6 +128,7 @@ class AiChatService {
     try {
       return await _sendWithTools(
         message,
+        apiKey: selectedApiKey,
         imageBytes: imageBytes,
         imageMimeType: imageMimeType,
       );
@@ -123,11 +152,73 @@ class AiChatService {
         ? _defaultModelName
         : _configuredModelName.trim();
     _history.clear();
+    _pendingDoseOptionsById.clear();
     _quotaBlockedUntil = null;
+  }
+
+  bool get hasPersonalApiKey => _personalApiKey.trim().isNotEmpty;
+  bool get isUsingPersonalApiKey => _usePersonalApiKey;
+
+  Future<void> loadApiKeyPreferences() => _loadPreferencesIfNeeded();
+
+  Future<void> setUsePersonalApiKey(bool value) async {
+    await _loadPreferencesIfNeeded();
+    _usePersonalApiKey = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefUsePersonalApiKey, value);
+  }
+
+  Future<void> savePersonalApiKey(String apiKey) async {
+    await _loadPreferencesIfNeeded();
+    _personalApiKey = apiKey.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefPersonalApiKey, _personalApiKey);
+  }
+
+  Future<void> clearPersonalApiKey() async {
+    await _loadPreferencesIfNeeded();
+    _personalApiKey = '';
+    _usePersonalApiKey = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefPersonalApiKey);
+    await prefs.setBool(_prefUsePersonalApiKey, false);
+  }
+
+  Future<String?> validatePersonalApiKey(String apiKey) async {
+    final trimmedKey = apiKey.trim();
+    if (trimmedKey.isEmpty) {
+      return 'La API key está vacía.';
+    }
+    if (_activeModelName.trim().isEmpty) {
+      _activeModelName = _defaultModelName;
+    }
+
+    try {
+      await _createChatCompletion(
+        _activeModelName,
+        apiKey: trimmedKey,
+        includeTools: false,
+        overrideMessages: const [
+          {'role': 'user', 'content': 'Responde con OK'},
+        ],
+        maxTokens: 4,
+      );
+      return null;
+    } catch (error) {
+      final raw = error.toString();
+      if (raw.contains('401') || raw.toLowerCase().contains('invalid')) {
+        return 'La API key no es válida.';
+      }
+      if (raw.contains('429')) {
+        return 'La API key está válida pero alcanzó su límite temporal.';
+      }
+      return 'No se pudo validar la API key: $raw';
+    }
   }
 
   Future<String> _sendWithTools(
     String userMessage, {
+    required String apiKey,
     Uint8List? imageBytes,
     String? imageMimeType,
   }) async {
@@ -152,7 +243,10 @@ class AiChatService {
     _trimHistory();
 
     try {
-      final assistantMessage = await _createChatCompletion(requestModel);
+      final assistantMessage = await _createChatCompletion(
+        requestModel,
+        apiKey: apiKey,
+      );
       final calls = _extractToolCalls(assistantMessage);
       if (calls.isEmpty) {
         final text = _extractAssistantText(assistantMessage);
@@ -223,30 +317,50 @@ class AiChatService {
     return parts.isEmpty ? null : parts;
   }
 
-  Future<Map<String, Object?>> _createChatCompletion(String model) async {
+  Future<Map<String, Object?>> _createChatCompletion(
+    String model, {
+    required String apiKey,
+    bool includeTools = true,
+    List<Map<String, Object?>>? overrideMessages,
+    int? maxTokens,
+  }) async {
     final url = Uri.parse(_chatCompletionsUrl);
     final client = HttpClient();
     try {
       final request = await client.postUrl(url);
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_apiKey');
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $apiKey');
       request.headers.contentType = ContentType(
         'application',
         'json',
         charset: 'utf-8',
       );
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      final payload = jsonEncode({
+      final payloadMap = <String, Object?>{
         'model': model,
-        'messages': [
-          {
-            'role': 'system',
-            'content': '$_systemInstruction ${_todayContextForModel()}',
-          },
-          ..._history,
-        ],
-        'tools': [_medicationTool()],
-        'tool_choice': 'auto',
-      });
+        'messages':
+            overrideMessages ??
+            [
+              {
+                'role': 'system',
+                'content': '$_systemInstruction ${_todayContextForModel()}',
+              },
+              ..._history,
+            ],
+      };
+      if (includeTools) {
+        payloadMap['tools'] = [
+          _medicationTool(),
+          _editMedicationTool(),
+          _deleteMedicationTool(),
+          _listPendingDosesTool(),
+          _markPendingDoseTakenTool(),
+        ];
+        payloadMap['tool_choice'] = 'auto';
+      }
+      if (maxTokens != null) {
+        payloadMap['max_tokens'] = maxTokens;
+      }
+      final payload = jsonEncode(payloadMap);
       request.add(utf8.encode(payload));
 
       final response = await request.close();
@@ -277,6 +391,22 @@ class AiChatService {
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<void> _loadPreferencesIfNeeded() async {
+    if (_preferencesLoaded) return;
+    final prefs = await SharedPreferences.getInstance();
+    _usePersonalApiKey = prefs.getBool(_prefUsePersonalApiKey) ?? false;
+    _personalApiKey = prefs.getString(_prefPersonalApiKey) ?? '';
+    _preferencesLoaded = true;
+  }
+
+  String get _selectedApiKey {
+    final personal = _personalApiKey.trim();
+    if (_usePersonalApiKey && personal.isNotEmpty) {
+      return personal;
+    }
+    return _appApiKey.trim();
   }
 
   String? _extractApiErrorMessage(Map<String, dynamic> payload) {
@@ -343,6 +473,18 @@ class AiChatService {
     if (call.name == 'agendar_medicamento') {
       return _handleScheduleMedication(call.args);
     }
+    if (call.name == 'editar_medicamento') {
+      return _handleEditMedication(call.args);
+    }
+    if (call.name == 'eliminar_medicamento') {
+      return _handleDeleteMedication(call.args);
+    }
+    if (call.name == 'listar_pendientes_hoy') {
+      return _handleListPendingDosesToday();
+    }
+    if (call.name == 'marcar_pendiente_como_tomado') {
+      return _handleMarkPendingDoseAsTaken(call.args);
+    }
     return {'ok': false, 'error': 'Función no soportada: ${call.name}'};
   }
 
@@ -383,8 +525,17 @@ class AiChatService {
                 'every_8_hours',
                 'every_6_hours',
                 'custom_times',
+                'every_n_days',
               ],
               'description': 'Frecuencia del tratamiento',
+            },
+            'every_n_days': {
+              'anyOf': [
+                {'type': 'integer'},
+                {'type': 'null'},
+              ],
+              'description':
+                  'Obligatorio si frequency_rule es every_n_days. Debe ser 2 o mayor.',
             },
             'first_dose_time': {
               'type': 'string',
@@ -403,6 +554,14 @@ class AiChatService {
               ],
               'description':
                   'Días de duración. Obligatorio para jarabe, crema, gotas, spray e inhalador.',
+            },
+            'indefinite': {
+              'anyOf': [
+                {'type': 'boolean'},
+                {'type': 'null'},
+              ],
+              'description':
+                  'Indica si el tratamiento es de por vida o sin fecha final definida.',
             },
             'total_units': {
               'anyOf': [
@@ -455,6 +614,182 @@ class AiChatService {
     };
   }
 
+  Map<String, Object?> _editMedicationTool() {
+    return {
+      'type': 'function',
+      'function': {
+        'name': 'editar_medicamento',
+        'description':
+            'Edita un medicamento existente usando id o nombre como referencia.',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'medication_id': {
+              'anyOf': [
+                {'type': 'integer'},
+                {'type': 'null'},
+              ],
+              'description': 'ID del medicamento a editar',
+            },
+            'medication_name': {
+              'type': ['string', 'null'],
+              'description':
+                  'Nombre del medicamento a editar (si no se conoce el id)',
+            },
+            'name': {
+              'type': ['string', 'null'],
+            },
+            'dose_amount': {
+              'anyOf': [
+                {'type': 'number'},
+                {'type': 'null'},
+              ],
+            },
+            'dose_unit': {
+              'type': ['string', 'null'],
+            },
+            'form': {
+              'type': ['string', 'null'],
+              'enum': [..._validMedicationForms, null],
+            },
+            'route': {
+              'type': ['string', 'null'],
+            },
+            'frequency_rule': {
+              'type': ['string', 'null'],
+              'enum': [
+                'every_24_hours',
+                'every_12_hours',
+                'every_8_hours',
+                'every_6_hours',
+                'custom_times',
+                'every_n_days',
+                null,
+              ],
+            },
+            'every_n_days': {
+              'anyOf': [
+                {'type': 'integer'},
+                {'type': 'null'},
+              ],
+            },
+            'first_dose_time': {
+              'type': ['string', 'null'],
+            },
+            'start_date': {
+              'type': ['string', 'null'],
+            },
+            'duration_days': {
+              'anyOf': [
+                {'type': 'integer'},
+                {'type': 'null'},
+              ],
+            },
+            'indefinite': {
+              'anyOf': [
+                {'type': 'boolean'},
+                {'type': 'null'},
+              ],
+            },
+            'total_units': {
+              'anyOf': [
+                {'type': 'number'},
+                {'type': 'null'},
+              ],
+            },
+            'intake_quantity': {
+              'anyOf': [
+                {'type': 'number'},
+                {'type': 'null'},
+              ],
+            },
+            'instructions': {
+              'type': ['string', 'null'],
+              'description':
+                  'Indicaciones nuevas dadas por el usuario para incluir en las instrucciones generadas',
+            },
+            'custom_times': {
+              'anyOf': [
+                {
+                  'type': 'array',
+                  'items': {'type': 'string'},
+                },
+                {'type': 'null'},
+              ],
+            },
+            'status': {
+              'type': ['string', 'null'],
+              'enum': ['active', 'finished', null],
+            },
+          },
+          'required': [],
+        },
+      },
+    };
+  }
+
+  Map<String, Object?> _deleteMedicationTool() {
+    return {
+      'type': 'function',
+      'function': {
+        'name': 'eliminar_medicamento',
+        'description':
+            'Elimina un medicamento existente usando id o nombre como referencia.',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'medication_id': {
+              'anyOf': [
+                {'type': 'integer'},
+                {'type': 'null'},
+              ],
+              'description': 'ID del medicamento a eliminar',
+            },
+            'medication_name': {
+              'type': ['string', 'null'],
+              'description':
+                  'Nombre del medicamento a eliminar (si no se conoce el id)',
+            },
+          },
+          'required': [],
+        },
+      },
+    };
+  }
+
+  Map<String, Object?> _listPendingDosesTool() {
+    return {
+      'type': 'function',
+      'function': {
+        'name': 'listar_pendientes_hoy',
+        'description':
+            'Obtiene las tomas pendientes para hoy y devuelve opciones numeradas para que el usuario elija cuál marcar como tomada.',
+        'parameters': {'type': 'object', 'properties': {}, 'required': []},
+      },
+    };
+  }
+
+  Map<String, Object?> _markPendingDoseTakenTool() {
+    return {
+      'type': 'function',
+      'function': {
+        'name': 'marcar_pendiente_como_tomado',
+        'description':
+            'Marca como tomada una dosis pendiente de hoy usando el option_id devuelto por listar_pendientes_hoy.',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'option_id': {
+              'type': 'integer',
+              'description': 'Número de opción elegido por el usuario',
+            },
+          },
+          'required': ['option_id'],
+        },
+      },
+    };
+  }
+
   Future<Map<String, Object?>> _handleScheduleMedication(
     Map<String, Object?> args,
   ) async {
@@ -490,9 +825,21 @@ class AiChatService {
     if (route.isEmpty) {
       return {'ok': false, 'error': 'route es obligatorio'};
     }
-    final frequencyRule = (args['frequency_rule']?.toString() ?? '').trim();
-    if (frequencyRule.isEmpty) {
+    final frequencyRuleRaw = (args['frequency_rule']?.toString() ?? '').trim();
+    if (frequencyRuleRaw.isEmpty) {
       return {'ok': false, 'error': 'frequency_rule es obligatorio'};
+    }
+    final everyNDays = (args['every_n_days'] as num?)?.toInt();
+    final frequencyRule = _normalizeFrequencyRule(
+      frequencyRuleRaw,
+      everyNDays: everyNDays,
+    );
+    if (frequencyRule == null) {
+      return {
+        'ok': false,
+        'error':
+            'frequency_rule no válido. Usa every_24_hours, every_12_hours, every_8_hours, every_6_hours, custom_times o every_n_days (con every_n_days >= 2).',
+      };
     }
 
     final firstDoseTimeRaw = (args['first_dose_time']?.toString() ?? '').trim();
@@ -513,23 +860,29 @@ class AiChatService {
       return {'ok': false, 'error': 'start_date debe tener formato YYYY-MM-DD'};
     }
 
-    final durationDays = (args['duration_days'] as num?)?.toInt();
+    final indefinite = _parseLooseBool(args['indefinite']) ?? false;
+    final requestedDurationDays = (args['duration_days'] as num?)?.toInt();
+    final durationDays = indefinite ? null : requestedDurationDays;
     final requiresDurationDays = _requiresDurationDaysForForm(form);
-    if (requiresDurationDays && (durationDays == null || durationDays <= 0)) {
+    if (requiresDurationDays &&
+        !indefinite &&
+        (durationDays == null || durationDays <= 0)) {
       return {
         'ok': false,
         'error':
-            'duration_days es obligatorio para este tipo de medicamento (jarabe/crema/gotas/spray/inhalador).',
+            'duration_days es obligatorio para este tipo de medicamento (jarabe/crema/gotas/spray/inhalador), salvo que sea tratamiento de por vida (indefinite=true).',
       };
     }
 
     final requiresTotalUnits = _requiresTotalUnitsForForm(form);
     final totalUnits = (args['total_units'] as num?)?.toDouble();
-    if (requiresTotalUnits && (totalUnits == null || totalUnits <= 0)) {
+    if (requiresTotalUnits &&
+        !indefinite &&
+        (totalUnits == null || totalUnits <= 0)) {
       return {
         'ok': false,
         'error':
-            'total_units es obligatorio para este tipo de medicamento. Indica cuántas unidades totales tienes.',
+            'total_units es obligatorio para este tipo de medicamento, salvo que sea tratamiento de por vida (indefinite=true).',
       };
     }
 
@@ -590,7 +943,7 @@ class AiChatService {
       'first_dose_at': firstDoseAt.toIso8601String(),
       'start_date': _toIsoDate(startDate),
       'end_date': endDate == null ? null : _toIsoDate(endDate),
-      'indefinite': durationDays == null ? 1 : 0,
+      'indefinite': indefinite || durationDays == null ? 1 : 0,
       'frequency_rule': frequencyRule,
       'days_of_week': '1,2,3,4,5,6,7',
       'stock_current': totalUnits,
@@ -617,14 +970,693 @@ class AiChatService {
 
     return {
       'ok': true,
+      'action': 'created',
       'medication_id': medicationId,
       'name': name,
+      'form': form,
+      'route': route,
+      'status': 'active',
+      'dose_amount': doseAmount,
+      'dose_unit': doseUnit,
+      'intake_quantity': intakeQuantity,
+      'indefinite': indefinite || durationDays == null ? 1 : 0,
       'frequency_rule': frequencyRule,
       'times': scheduleTimes,
       'start_date': _toIsoDate(startDate),
       'end_date': endDate == null ? null : _toIsoDate(endDate),
       'total_units': totalUnits,
     };
+  }
+
+  Future<Map<String, Object?>> _handleEditMedication(
+    Map<String, Object?> args,
+  ) async {
+    final target = await _resolveMedicationTarget(args);
+    if (target['ok'] != true) return target;
+
+    final medication = target['medication'] as Map<String, Object?>;
+    final medicationId = (medication['id'] as num?)?.toInt();
+    if (medicationId == null) {
+      return {'ok': false, 'error': 'No se pudo determinar el medicamento.'};
+    }
+
+    final currentSchedules = await AppDatabase.instance.getMedicationSchedules(
+      medicationId,
+    );
+    final existingTimes = currentSchedules
+        .map((row) => row['time_of_day']?.toString().trim() ?? '')
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    final updatedName = (args['name']?.toString() ?? '').trim();
+    final name = updatedName.isEmpty
+        ? (medication['name']?.toString().trim() ?? '')
+        : updatedName;
+    if (name.isEmpty) return {'ok': false, 'error': 'name es obligatorio'};
+
+    final updatedDoseAmount = (args['dose_amount'] as num?)?.toDouble();
+    final currentDoseAmount = (medication['dose_amount'] as num?)?.toDouble();
+    final doseAmount = updatedDoseAmount ?? currentDoseAmount;
+    if (doseAmount == null || doseAmount <= 0) {
+      return {'ok': false, 'error': 'dose_amount debe ser mayor que 0'};
+    }
+
+    final updatedDoseUnit = (args['dose_unit']?.toString() ?? '').trim();
+    final doseUnit = updatedDoseUnit.isEmpty
+        ? (medication['dose_unit']?.toString().trim() ?? '')
+        : updatedDoseUnit;
+    if (doseUnit.isEmpty) {
+      return {'ok': false, 'error': 'dose_unit es obligatorio'};
+    }
+
+    final updatedFormRaw = (args['form']?.toString() ?? '').trim();
+    final currentFormRaw = medication['form']?.toString().trim() ?? '';
+    final formCandidate = updatedFormRaw.isEmpty
+        ? currentFormRaw
+        : updatedFormRaw;
+    final form = _normalizeMedicationForm(formCandidate);
+    if (form == null) {
+      return {
+        'ok': false,
+        'error':
+            'form no válido. Debe ser uno de: ${_validMedicationForms.join(', ')}',
+      };
+    }
+
+    final updatedRoute = (args['route']?.toString() ?? '').trim();
+    final route = updatedRoute.isEmpty
+        ? (medication['route']?.toString().trim() ?? '')
+        : updatedRoute;
+    if (route.isEmpty) return {'ok': false, 'error': 'route es obligatorio'};
+
+    final updatedFrequencyRule = (args['frequency_rule']?.toString() ?? '')
+        .trim();
+    final everyNDays = (args['every_n_days'] as num?)?.toInt();
+    final frequencyRule = updatedFrequencyRule.isEmpty
+        ? (medication['frequency_rule']?.toString().trim() ?? '')
+        : _normalizeFrequencyRule(updatedFrequencyRule, everyNDays: everyNDays);
+    if (frequencyRule == null || frequencyRule.isEmpty) {
+      return {'ok': false, 'error': 'frequency_rule es obligatorio'};
+    }
+
+    final startDateRaw = (args['start_date']?.toString() ?? '').trim();
+    final currentStartDateRaw =
+        medication['start_date']?.toString().trim() ?? '';
+    final finalStartDateRaw = startDateRaw.isEmpty
+        ? currentStartDateRaw
+        : startDateRaw;
+    final startDate = DateTime.tryParse(finalStartDateRaw)?.toLocal();
+    if (startDate == null) {
+      return {'ok': false, 'error': 'start_date debe tener formato YYYY-MM-DD'};
+    }
+
+    final firstDoseTimeRaw = (args['first_dose_time']?.toString() ?? '').trim();
+    (int, int)? firstDoseTime;
+    if (firstDoseTimeRaw.isNotEmpty) {
+      firstDoseTime = _parseHourMinute(firstDoseTimeRaw);
+    } else {
+      final currentFirstDoseAtRaw =
+          medication['first_dose_at']?.toString().trim() ?? '';
+      final currentFirstDoseAt = DateTime.tryParse(
+        currentFirstDoseAtRaw,
+      )?.toLocal();
+      if (currentFirstDoseAt != null) {
+        firstDoseTime = (currentFirstDoseAt.hour, currentFirstDoseAt.minute);
+      } else if (existingTimes.isNotEmpty) {
+        firstDoseTime = _parseHourMinute(existingTimes.first);
+      }
+    }
+    if (firstDoseTime == null) {
+      return {
+        'ok': false,
+        'error': 'first_dose_time debe tener formato HH:mm o h:mm AM/PM',
+      };
+    }
+
+    final currentEndDateRaw = medication['end_date']?.toString().trim() ?? '';
+    int? durationDays;
+    final updatedDurationDays = (args['duration_days'] as num?)?.toInt();
+    final updatedIndefinite = _parseLooseBool(args['indefinite']);
+    final currentIndefinite = (medication['indefinite'] as num?)?.toInt() == 1;
+    final isIndefinite = updatedIndefinite ?? currentIndefinite;
+    if (updatedDurationDays != null) {
+      durationDays = updatedDurationDays;
+    } else {
+      final currentEndDate = DateTime.tryParse(currentEndDateRaw)?.toLocal();
+      if (currentEndDate != null) {
+        durationDays =
+            currentEndDate
+                .difference(
+                  DateTime(startDate.year, startDate.month, startDate.day),
+                )
+                .inDays +
+            1;
+      }
+    }
+    if (isIndefinite) {
+      durationDays = null;
+    }
+    final requiresDurationDays = _requiresDurationDaysForForm(form);
+    if (requiresDurationDays &&
+        !isIndefinite &&
+        (durationDays == null || durationDays <= 0)) {
+      return {
+        'ok': false,
+        'error':
+            'duration_days es obligatorio para este tipo de medicamento (jarabe/crema/gotas/spray/inhalador), salvo que sea tratamiento de por vida (indefinite=true).',
+      };
+    }
+
+    final currentStock = (medication['stock_current'] as num?)?.toDouble();
+    final updatedTotalUnits = (args['total_units'] as num?)?.toDouble();
+    final totalUnits = updatedTotalUnits ?? currentStock;
+    final requiresTotalUnits = _requiresTotalUnitsForForm(form);
+    if (requiresTotalUnits &&
+        !isIndefinite &&
+        (totalUnits == null || totalUnits <= 0)) {
+      return {
+        'ok': false,
+        'error':
+            'total_units es obligatorio para este tipo de medicamento, salvo que sea tratamiento de por vida (indefinite=true).',
+      };
+    }
+
+    final intakeQuantity =
+        ((args['intake_quantity'] as num?)?.toDouble() ??
+                (medication['intake_quantity'] as num?)?.toDouble() ??
+                1)
+            .clamp(1, 50);
+
+    final customTimes =
+        (args['custom_times'] as List?)
+            ?.map((e) => e?.toString() ?? '')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList() ??
+        const <String>[];
+    final shouldRebuildTimes =
+        updatedFrequencyRule.isNotEmpty ||
+        firstDoseTimeRaw.isNotEmpty ||
+        customTimes.isNotEmpty;
+
+    final scheduleTimes = shouldRebuildTimes
+        ? _buildScheduleTimes(
+            frequencyRule: frequencyRule,
+            firstDoseTime: firstDoseTime,
+            customTimes: customTimes,
+          )
+        : (existingTimes.isEmpty
+              ? _buildScheduleTimes(
+                  frequencyRule: frequencyRule,
+                  firstDoseTime: firstDoseTime,
+                  customTimes: customTimes,
+                )
+              : existingTimes);
+
+    if (scheduleTimes.isEmpty) {
+      return {'ok': false, 'error': 'No se pudo calcular el horario'};
+    }
+
+    final statusRaw = (args['status']?.toString() ?? '').trim().toLowerCase();
+    final status = statusRaw == 'finished' || statusRaw == 'active'
+        ? statusRaw
+        : (medication['status']?.toString().trim().isNotEmpty ?? false)
+        ? medication['status']!.toString().trim()
+        : 'active';
+
+    final endDate = durationDays == null
+        ? null
+        : DateTime(
+            startDate.year,
+            startDate.month,
+            startDate.day,
+          ).add(Duration(days: durationDays - 1));
+    final userNotes = (args['instructions']?.toString() ?? '').trim();
+    final generatedInstructions = _buildGeneratedInstructions(
+      form: form,
+      route: route,
+      doseAmount: doseAmount,
+      doseUnit: doseUnit,
+      times: scheduleTimes,
+      endDate: endDate,
+      userNotes: userNotes,
+    );
+
+    final firstDoseAt = DateTime(
+      startDate.year,
+      startDate.month,
+      startDate.day,
+      firstDoseTime.$1,
+      firstDoseTime.$2,
+    );
+
+    await AppDatabase.instance.updateMedication(medicationId, {
+      'name': name,
+      'dose_amount': doseAmount,
+      'dose_unit': doseUnit,
+      'form': form,
+      'route': route,
+      'status': status,
+      'instructions': generatedInstructions,
+      'first_dose_at': firstDoseAt.toIso8601String(),
+      'start_date': _toIsoDate(startDate),
+      'end_date': endDate == null ? null : _toIsoDate(endDate),
+      'indefinite': isIndefinite || durationDays == null ? 1 : 0,
+      'frequency_rule': frequencyRule,
+      'days_of_week': '1,2,3,4,5,6,7',
+      'stock_current': totalUnits,
+      'stock_initial': totalUnits,
+      'intake_quantity': intakeQuantity,
+      'updated_at': DateTime.now().toIso8601String(),
+    }, times: scheduleTimes);
+
+    if (status == 'finished') {
+      await NotificationsService.instance.showMedicationFinished(
+        medicationName: name,
+        medicationForm: form,
+      );
+    } else {
+      await NotificationsService.instance.showMedicationUpdated(
+        medicationName: name,
+        medicationForm: form,
+      );
+    }
+    await NotificationsService.instance
+        .syncTodayDoseNotificationsFromDatabase();
+
+    return {
+      'ok': true,
+      'medication_id': medicationId,
+      'name': name,
+      'action': 'updated',
+      'form': form,
+      'route': route,
+      'status': status,
+      'dose_amount': doseAmount,
+      'dose_unit': doseUnit,
+      'intake_quantity': intakeQuantity,
+      'indefinite': isIndefinite || durationDays == null ? 1 : 0,
+      'frequency_rule': frequencyRule,
+      'times': scheduleTimes,
+      'start_date': _toIsoDate(startDate),
+      'end_date': endDate == null ? null : _toIsoDate(endDate),
+    };
+  }
+
+  Future<Map<String, Object?>> _handleDeleteMedication(
+    Map<String, Object?> args,
+  ) async {
+    final target = await _resolveMedicationTarget(args);
+    if (target['ok'] != true) return target;
+
+    final medication = target['medication'] as Map<String, Object?>;
+    final medicationId = (medication['id'] as num?)?.toInt();
+    if (medicationId == null) {
+      return {'ok': false, 'error': 'No se pudo determinar el medicamento.'};
+    }
+    final name = medication['name']?.toString().trim() ?? 'medicamento';
+    final form = medication['form']?.toString().trim();
+
+    await AppDatabase.instance.deleteMedication(medicationId);
+    await NotificationsService.instance.showMedicationDeleted(
+      medicationName: name,
+      medicationForm: (form == null || form.isEmpty) ? null : form,
+    );
+    await NotificationsService.instance
+        .syncTodayDoseNotificationsFromDatabase();
+    return {
+      'ok': true,
+      'action': 'deleted',
+      'medication_id': medicationId,
+      'name': name,
+    };
+  }
+
+  Future<Map<String, Object?>> _handleListPendingDosesToday() async {
+    final pending = await _getPendingDosesToday();
+    _pendingDoseOptionsById
+      ..clear()
+      ..addEntries(pending.map((dose) => MapEntry(dose.optionId, dose)));
+
+    final options = pending
+        .map(
+          (dose) => {
+            'option_id': dose.optionId,
+            'medication_id': dose.medicationId,
+            'medication_name': dose.name,
+            'scheduled_at': dose.scheduledAt.toIso8601String(),
+            'scheduled_time': _normalizeAssistantTimeFormat(
+              _toHourMinute(
+                (dose.scheduledAt.hour * 60) + dose.scheduledAt.minute,
+              ),
+            ),
+            'dose': '${_formatDoseValue(dose.doseAmount)} ${dose.doseUnit}',
+          },
+        )
+        .toList(growable: false);
+
+    return {
+      'ok': true,
+      'action': 'list_pending_today',
+      'count': options.length,
+      'options': options,
+    };
+  }
+
+  Future<Map<String, Object?>> _handleMarkPendingDoseAsTaken(
+    Map<String, Object?> args,
+  ) async {
+    final optionId = (args['option_id'] as num?)?.toInt();
+    if (optionId == null || optionId <= 0) {
+      return {'ok': false, 'error': 'option_id inválido.'};
+    }
+
+    var selected = _pendingDoseOptionsById[optionId];
+    if (selected == null) {
+      final refreshed = await _getPendingDosesToday();
+      _pendingDoseOptionsById
+        ..clear()
+        ..addEntries(refreshed.map((dose) => MapEntry(dose.optionId, dose)));
+      selected = _pendingDoseOptionsById[optionId];
+      if (selected == null) {
+        return {
+          'ok': false,
+          'error':
+              'No encontré esa opción pendiente. Solicita la lista de pendientes de hoy nuevamente.',
+        };
+      }
+    }
+
+    final marked = await AppDatabase.instance.markDoseAsTaken(
+      medicationId: selected.medicationId,
+      scheduledAt: selected.scheduledAt,
+      intakeQuantity: selected.intakeQuantity,
+    );
+    if (!marked) {
+      return {
+        'ok': false,
+        'error':
+            'Esa dosis ya estaba marcada como tomada. Puedes pedir la lista actualizada.',
+      };
+    }
+
+    _pendingDoseOptionsById.remove(optionId);
+    await NotificationsService.instance
+        .syncTodayDoseNotificationsFromDatabase();
+    return {
+      'ok': true,
+      'action': 'marked_taken',
+      'option_id': optionId,
+      'medication_id': selected.medicationId,
+      'name': selected.name,
+      'scheduled_at': selected.scheduledAt.toIso8601String(),
+    };
+  }
+
+  Future<Map<String, Object?>> _resolveMedicationTarget(
+    Map<String, Object?> args,
+  ) async {
+    final medications = await AppDatabase.instance.getMedications();
+    if (medications.isEmpty) {
+      return {'ok': false, 'error': 'No hay medicamentos registrados.'};
+    }
+
+    final medicationId = (args['medication_id'] as num?)?.toInt();
+    if (medicationId != null) {
+      for (final row in medications) {
+        if ((row['id'] as num?)?.toInt() == medicationId) {
+          return {'ok': true, 'medication': row};
+        }
+      }
+      return {
+        'ok': false,
+        'error': 'No encontré medicamento con id $medicationId.',
+      };
+    }
+
+    final medicationName = (args['medication_name']?.toString() ?? '').trim();
+    if (medicationName.isEmpty) {
+      return {
+        'ok': false,
+        'error':
+            'Necesito medication_id o medication_name para identificar el medicamento.',
+      };
+    }
+
+    final normalized = medicationName.toLowerCase();
+    final exact = medications.where((row) {
+      final name = row['name']?.toString().trim().toLowerCase() ?? '';
+      return name == normalized;
+    }).toList();
+    if (exact.length == 1) return {'ok': true, 'medication': exact.first};
+    if (exact.length > 1) {
+      final names = exact
+          .take(5)
+          .map(
+            (row) => '${row['name']} (id ${(row['id'] as num?)?.toInt() ?? 0})',
+          )
+          .join(', ');
+      return {
+        'ok': false,
+        'error':
+            'Hay varios medicamentos con ese nombre. Indica el id. Opciones: $names',
+      };
+    }
+
+    final partial = medications.where((row) {
+      final name = row['name']?.toString().trim().toLowerCase() ?? '';
+      return name.contains(normalized);
+    }).toList();
+    if (partial.length == 1) return {'ok': true, 'medication': partial.first};
+    if (partial.length > 1) {
+      final names = partial
+          .take(5)
+          .map(
+            (row) => '${row['name']} (id ${(row['id'] as num?)?.toInt() ?? 0})',
+          )
+          .join(', ');
+      return {
+        'ok': false,
+        'error':
+            'Coincidencias múltiples. Indica el id del medicamento. Opciones: $names',
+      };
+    }
+
+    return {
+      'ok': false,
+      'error': 'No encontré un medicamento que coincida con "$medicationName".',
+    };
+  }
+
+  Future<List<_PendingDoseOption>> _getPendingDosesToday() async {
+    final db = AppDatabase.instance;
+    final medications = await db.getMedications();
+    final logs = await db.getDoseLogs(status: 'taken');
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    final takenByKey = <String>{};
+    for (final log in logs) {
+      final medicationId = log['medication_id'];
+      final scheduledAtRaw = log['scheduled_at']?.toString();
+      if (medicationId is! int || scheduledAtRaw == null) continue;
+      final scheduledAt = DateTime.tryParse(scheduledAtRaw);
+      if (scheduledAt == null) continue;
+      final key = '${medicationId}_${_dateTimeKey(scheduledAt)}';
+      takenByKey.add(key);
+    }
+
+    final pending = <_PendingDoseOption>[];
+    for (final medication in medications) {
+      final status = medication['status']?.toString() ?? 'active';
+      if (status != 'active') continue;
+
+      final medicationId = medication['id'];
+      if (medicationId is! int) continue;
+
+      final schedules = await db.getMedicationSchedules(medicationId);
+      final scheduleMinutes = <int>[];
+      for (final schedule in schedules) {
+        final timeText = schedule['time_of_day']?.toString();
+        if (timeText == null || !_isValidHourMinuteText(timeText)) continue;
+        final parts = timeText.split(':');
+        final hour = int.parse(parts[0]);
+        final minute = int.parse(parts[1]);
+        scheduleMinutes.add(hour * 60 + minute);
+      }
+      if (scheduleMinutes.isEmpty) continue;
+      scheduleMinutes.sort();
+
+      final firstDoseAtRaw = medication['first_dose_at']?.toString().trim();
+      DateTime? firstDoseAt = (firstDoseAtRaw == null || firstDoseAtRaw.isEmpty)
+          ? null
+          : DateTime.tryParse(firstDoseAtRaw);
+      if (firstDoseAt == null) {
+        final startDateRaw = medication['start_date']?.toString().trim();
+        final startDate = (startDateRaw == null || startDateRaw.isEmpty)
+            ? null
+            : DateTime.tryParse(startDateRaw);
+        if (startDate != null) {
+          final firstMinute = scheduleMinutes.first;
+          firstDoseAt = DateTime(
+            startDate.year,
+            startDate.month,
+            startDate.day,
+            firstMinute ~/ 60,
+            firstMinute % 60,
+          );
+        }
+      }
+      if (firstDoseAt == null) continue;
+      final dayInterval = _frequencyDayInterval(
+        medication['frequency_rule']?.toString(),
+      );
+
+      final endDateRaw = medication['end_date']?.toString().trim();
+      final endDate = (endDateRaw == null || endDateRaw.isEmpty)
+          ? null
+          : DateTime.tryParse(endDateRaw);
+      final endDateExclusive = endDate == null
+          ? null
+          : DateTime(endDate.year, endDate.month, endDate.day + 1);
+      if (endDateExclusive != null && !today.isBefore(endDateExclusive)) {
+        continue;
+      }
+
+      final intakeQtyRaw =
+          (medication['intake_quantity'] as num?)?.toDouble() ?? 1.0;
+      final intakeQty = intakeQtyRaw <= 0 ? 1 : intakeQtyRaw.ceil();
+      final stockInitial = (medication['stock_initial'] as num?)?.toDouble();
+      final totalDoses = stockInitial == null
+          ? null
+          : (stockInitial / intakeQty).floor();
+      if (totalDoses != null && totalDoses <= 0) continue;
+
+      final name = medication['name']?.toString() ?? 'Medicamento';
+      final doseAmount = (medication['dose_amount'] as num?)?.toDouble() ?? 0;
+      final doseUnit = medication['dose_unit']?.toString() ?? '';
+      final form = medication['form']?.toString() ?? '';
+
+      for (final minute in scheduleMinutes) {
+        final scheduledAt = DateTime(
+          today.year,
+          today.month,
+          today.day,
+          minute ~/ 60,
+          minute % 60,
+        );
+        final scheduledDay = DateTime(
+          scheduledAt.year,
+          scheduledAt.month,
+          scheduledAt.day,
+        );
+        final firstDay = DateTime(
+          firstDoseAt.year,
+          firstDoseAt.month,
+          firstDoseAt.day,
+        );
+        final dayDiff = scheduledDay.difference(firstDay).inDays;
+        if (dayDiff < 0 || dayDiff % dayInterval != 0) continue;
+        if (scheduledAt.isBefore(firstDoseAt)) continue;
+        if (endDateExclusive != null &&
+            !scheduledAt.isBefore(endDateExclusive)) {
+          continue;
+        }
+
+        if (totalDoses != null) {
+          final ordinal = _doseOrdinalForSchedule(
+            scheduleMinutes: scheduleMinutes,
+            firstDoseAt: firstDoseAt,
+            scheduledAt: scheduledAt,
+            dayInterval: dayInterval,
+          );
+          if (ordinal > totalDoses) continue;
+        }
+
+        final key = '${medicationId}_${_dateTimeKey(scheduledAt)}';
+        if (takenByKey.contains(key)) continue;
+        pending.add(
+          _PendingDoseOption(
+            optionId: 0,
+            medicationId: medicationId,
+            name: name,
+            form: form,
+            doseAmount: doseAmount,
+            doseUnit: doseUnit,
+            intakeQuantity: intakeQty,
+            scheduledAt: scheduledAt,
+          ),
+        );
+      }
+    }
+
+    pending.sort((a, b) => a.scheduledAt.compareTo(b.scheduledAt));
+    for (var i = 0; i < pending.length; i++) {
+      pending[i] = pending[i].copyWith(optionId: i + 1);
+    }
+    return pending;
+  }
+
+  int _doseOrdinalForSchedule({
+    required List<int> scheduleMinutes,
+    required DateTime firstDoseAt,
+    required DateTime scheduledAt,
+    required int dayInterval,
+  }) {
+    if (scheduleMinutes.isEmpty) return 1;
+    final dayStart = DateTime(
+      scheduledAt.year,
+      scheduledAt.month,
+      scheduledAt.day,
+    );
+    final currentMinute = (scheduledAt.hour * 60) + scheduledAt.minute;
+    final indexToday = scheduleMinutes.indexOf(currentMinute);
+    final dosesPerDay = scheduleMinutes.length;
+    if (indexToday < 0) {
+      return 1;
+    }
+
+    final firstDayStart = DateTime(
+      firstDoseAt.year,
+      firstDoseAt.month,
+      firstDoseAt.day,
+    );
+    final firstMinute = (firstDoseAt.hour * 60) + firstDoseAt.minute;
+    final firstIndex = scheduleMinutes.lastIndexWhere((m) => m <= firstMinute);
+    final firstDayDoseIndex = firstIndex < 0 ? 0 : firstIndex;
+
+    final dayDiff = dayStart.difference(firstDayStart).inDays;
+    if (dayDiff < 0) {
+      return 0;
+    }
+    if (dayDiff % dayInterval != 0) {
+      return 0;
+    }
+    final intervalIndex = dayDiff ~/ dayInterval;
+    if (intervalIndex == 0) {
+      return (indexToday - firstDayDoseIndex) + 1;
+    }
+
+    final firstDayCount = dosesPerDay - firstDayDoseIndex;
+    return firstDayCount + ((intervalIndex - 1) * dosesPerDay) + indexToday + 1;
+  }
+
+  bool _isValidHourMinuteText(String value) {
+    return RegExp(r'^([01]\d|2[0-3]):[0-5]\d$').hasMatch(value);
+  }
+
+  String _dateTimeKey(DateTime value) {
+    final yyyy = value.year.toString().padLeft(4, '0');
+    final mm = value.month.toString().padLeft(2, '0');
+    final dd = value.day.toString().padLeft(2, '0');
+    final hh = value.hour.toString().padLeft(2, '0');
+    final min = value.minute.toString().padLeft(2, '0');
+    return '$yyyy$mm$dd$hh$min';
+  }
+
+  String _formatDoseValue(double value) {
+    if (value % 1 == 0) return value.toInt().toString();
+    return value.toString();
   }
 
   String _buildGeneratedInstructions({
@@ -671,6 +1703,13 @@ class AiChatService {
     required List<String> customTimes,
   }) {
     final minutes = (firstDoseTime.$1 * 60) + firstDoseTime.$2;
+    final everyNDaysMatch = RegExp(
+      r'^every_(\d+)_days$',
+    ).firstMatch(frequencyRule.toLowerCase().trim());
+    if (everyNDaysMatch != null) {
+      return [_toHourMinute(minutes)];
+    }
+
     switch (frequencyRule) {
       case 'every_24_hours':
         return [_toHourMinute(minutes)];
@@ -745,6 +1784,39 @@ class AiChatService {
     final month = date.month.toString().padLeft(2, '0');
     final year = date.year.toString().padLeft(4, '0');
     return '$year-$month-$day';
+  }
+
+  String? _normalizeFrequencyRule(String rawRule, {int? everyNDays}) {
+    final rule = rawRule.trim().toLowerCase();
+    if (rule.isEmpty) return null;
+    if (rule == 'daily') return 'every_24_hours';
+    if (rule.startsWith('custom_times')) return 'custom_times';
+    if (rule == 'every_24_hours' ||
+        rule == 'every_12_hours' ||
+        rule == 'every_8_hours' ||
+        rule == 'every_6_hours') {
+      return rule;
+    }
+    if (rule == 'every_n_days') {
+      if (everyNDays == null || everyNDays < 2) return null;
+      return 'every_${everyNDays}_days';
+    }
+    final intervalMatch = RegExp(r'^every_(\d+)_days$').firstMatch(rule);
+    if (intervalMatch != null) {
+      final parsed = int.tryParse(intervalMatch.group(1)!);
+      if (parsed == null || parsed < 2) return null;
+      return 'every_${parsed}_days';
+    }
+    return null;
+  }
+
+  int _frequencyDayInterval(String? rawRule) {
+    final rule = (rawRule ?? '').trim().toLowerCase();
+    final match = RegExp(r'^every_(\d+)_days$').firstMatch(rule);
+    if (match == null) return 1;
+    final parsed = int.tryParse(match.group(1) ?? '');
+    if (parsed == null || parsed < 2) return 1;
+    return parsed;
   }
 
   String _enhanceUserMessageForModel(String rawText) {
@@ -921,16 +1993,42 @@ class AiChatService {
         lower.contains('supositorio');
   }
 
+  bool? _parseLooseBool(Object? value) {
+    if (value is bool) return value;
+    final text = value?.toString().trim().toLowerCase();
+    if (text == null || text.isEmpty) return null;
+    if (text == 'true' || text == '1' || text == 'si' || text == 'sí') {
+      return true;
+    }
+    if (text == 'false' || text == '0' || text == 'no') {
+      return false;
+    }
+    return null;
+  }
+
   String _todayContextForModel() {
     final now = DateTime.now();
-    final yyyy = now.year.toString().padLeft(4, '0');
-    final mm = now.month.toString().padLeft(2, '0');
-    final dd = now.day.toString().padLeft(2, '0');
-    return 'Contexto de fecha: hoy es $yyyy-$mm-$dd (formato YYYY-MM-DD).';
+    final dateIso = DateFormat('yyyy-MM-dd').format(now);
+    final time24 = DateFormat('HH:mm').format(now);
+    final time12 = DateFormat('h:mm a').format(now);
+    final utcOffset = now.timeZoneOffset;
+    final offsetSign = utcOffset.isNegative ? '-' : '+';
+    final offsetHours = utcOffset.inHours.abs().toString().padLeft(2, '0');
+    final offsetMinutes = (utcOffset.inMinutes.abs() % 60).toString().padLeft(
+      2,
+      '0',
+    );
+    final offsetText = '$offsetSign$offsetHours:$offsetMinutes';
+    return 'Contexto temporal actual: '
+        'hoy es $dateIso (YYYY-MM-DD), '
+        'hora local $time24 (24h) / $time12 (12h), '
+        'zona horaria ${now.timeZoneName} (UTC$offsetText).';
   }
 
   String _normalizeAssistantTimeFormat(String text) {
-    final timeRegex = RegExp(r'\b([01]?\d|2[0-3]):([0-5]\d)\b');
+    final timeRegex = RegExp(
+      r'\b([01]?\d|2[0-3]):([0-5]\d)\b(?!\s*[AaPp]\.?\s*[Mm]\.?)',
+    );
     return text.replaceAllMapped(timeRegex, (match) {
       final hour = int.parse(match.group(1)!);
       final minute = int.parse(match.group(2)!);
@@ -953,21 +2051,179 @@ class AiChatService {
     }
 
     if (functionName == 'agendar_medicamento') {
+      return _buildMedicationSummaryMessage(
+        result: result,
+        title: 'Medicamento agendado',
+      );
+    }
+
+    if (functionName == 'editar_medicamento') {
+      return _buildMedicationSummaryMessage(
+        result: result,
+        title: 'Medicamento actualizado',
+      );
+    }
+
+    if (functionName == 'eliminar_medicamento') {
       final name = (result['name']?.toString() ?? 'medicamento').trim();
-      final startDate = result['start_date']?.toString() ?? '';
-      final endDate = result['end_date']?.toString() ?? '';
-      final times =
-          (result['times'] as List?)?.map((e) => e.toString()).toList() ?? [];
-      final timesText = times.isEmpty
+      return 'Listo. Eliminé $name.';
+    }
+
+    if (functionName == 'listar_pendientes_hoy') {
+      final count = (result['count'] as num?)?.toInt() ?? 0;
+      if (count <= 0) {
+        return 'No hay tomas pendientes para hoy.';
+      }
+      final options =
+          (result['options'] as List?)
+              ?.whereType<Map>()
+              .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))
+              .toList() ??
+          const <Map<String, Object?>>[];
+      final lines = <String>['Estas son las tomas pendientes de hoy:'];
+      for (final option in options) {
+        final id = option['option_id']?.toString() ?? '?';
+        final name = option['medication_name']?.toString() ?? 'Medicamento';
+        final time = option['scheduled_time']?.toString() ?? '';
+        final dose = option['dose']?.toString() ?? '';
+        lines.add('$id. $name - $time - $dose');
+      }
+      lines.add('Indícame el número de opción para marcarla como completada.');
+      return lines.join('\n');
+    }
+
+    if (functionName == 'marcar_pendiente_como_tomado') {
+      final name = (result['name']?.toString() ?? 'medicamento').trim();
+      final scheduledAt = result['scheduled_at']?.toString() ?? '';
+      final dt = DateTime.tryParse(scheduledAt);
+      final timeText = dt == null
           ? ''
-          : '\nHorarios: ${times.map(_normalizeAssistantTimeFormat).join(', ')}.';
-      final endText = endDate.isEmpty
-          ? 'sin fecha de finalización definida.'
-          : 'hasta $endDate.';
-      return 'Listo. Agendé $name desde $startDate $endText$timesText';
+          : _normalizeAssistantTimeFormat(
+              _toHourMinute(dt.hour * 60 + dt.minute),
+            );
+      return timeText.isEmpty
+          ? 'Listo. Marqué la toma de $name como completada.'
+          : 'Listo. Marqué la toma de $name de las $timeText como completada.';
     }
 
     return 'Listo. Acción completada.';
+  }
+
+  String _buildMedicationSummaryMessage({
+    required Map<String, Object?> result,
+    required String title,
+  }) {
+    final name = (result['name']?.toString() ?? 'Medicamento').trim();
+    final form = (result['form']?.toString() ?? '').trim();
+    final route = (result['route']?.toString() ?? '').trim();
+    final statusRaw = (result['status']?.toString() ?? 'active').trim();
+    final statusLabel = statusRaw == 'finished' ? 'FINALIZADO' : 'EN CURSO';
+    final doseAmount = (result['dose_amount'] as num?)?.toDouble();
+    final doseUnit = _shortDoseUnit(result['dose_unit']?.toString() ?? '');
+    final frequencyRule = (result['frequency_rule']?.toString() ?? '').trim();
+    final startDate = (result['start_date']?.toString() ?? '').trim();
+    final endDate = (result['end_date']?.toString() ?? '').trim();
+    final times =
+        (result['times'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    final timesText = times.isEmpty
+        ? 'Sin horario definido'
+        : times.map(_normalizeAssistantTimeFormat).join(', ');
+    final frequencyLabel = _frequencyLabelForAssistant(frequencyRule);
+    final scheduleTitle = _scheduleTitleForAssistant(form);
+    final doseText = doseAmount == null
+        ? form.toLowerCase()
+        : '${_formatDoseValue(doseAmount)}$doseUnit • ${_pluralizeForAssistant(form)}';
+    final startLabel = _formatAssistantDateLabel(startDate);
+    final endLabel = endDate.isEmpty
+        ? 'Sin fecha de finalización'
+        : _formatAssistantDateLabel(endDate);
+    final routeLabel = route.isEmpty ? 'No especificada' : route;
+
+    final lines = <String>[
+      '### $title',
+      '#### $name  **$statusLabel**',
+      '',
+      '**DOSIS**',
+      '**$doseText**',
+      '',
+      '**FRECUENCIA**',
+      frequencyLabel,
+      '',
+      '**$scheduleTitle**',
+      timesText,
+      '',
+      '**INICIO**',
+      startLabel,
+      '',
+      '**FIN**',
+      endLabel,
+      '',
+      '**VÍA**',
+      routeLabel,
+    ];
+    return lines.join('\n');
+  }
+
+  String _shortDoseUnit(String fullUnit) {
+    final trimmed = fullUnit.trim();
+    if (trimmed.isEmpty) return '';
+    final index = trimmed.indexOf(' ');
+    return index > 0 ? trimmed.substring(0, index) : trimmed;
+  }
+
+  String _pluralizeForAssistant(String form) {
+    final lower = form.trim().toLowerCase();
+    if (lower.isEmpty) return 'dosis';
+    if (lower.endsWith('s')) return lower;
+    if (lower.endsWith('ción')) {
+      return '${lower.substring(0, lower.length - 4)}ciones';
+    }
+    if (lower.endsWith('ión')) {
+      return '${lower.substring(0, lower.length - 3)}iones';
+    }
+    if (lower.endsWith('z')) {
+      return '${lower.substring(0, lower.length - 1)}ces';
+    }
+    return '${lower}s';
+  }
+
+  String _scheduleTitleForAssistant(String form) {
+    final lower = form.toLowerCase();
+    if (lower.contains('inyec') ||
+        lower.contains('parche') ||
+        lower.contains('crema') ||
+        lower.contains('spray') ||
+        lower.contains('inhalador') ||
+        lower.contains('gota')) {
+      return 'HORAS DE APLICACIÓN';
+    }
+    if (lower.contains('supositorio')) return 'HORAS DE DOSIS';
+    return 'HORAS DE TOMA';
+  }
+
+  String _frequencyLabelForAssistant(String ruleRaw) {
+    final rule = ruleRaw.trim().toLowerCase();
+    if (rule == 'daily' || rule == 'every_24_hours') return 'Cada 24 horas';
+    if (rule == 'every_12_hours') return 'Cada 12 horas';
+    if (rule == 'every_8_hours') return 'Cada 8 horas';
+    if (rule == 'every_6_hours') return 'Cada 6 horas';
+    final everyNDaysMatch = RegExp(r'^every_(\d+)_days$').firstMatch(rule);
+    if (everyNDaysMatch != null) {
+      final days = int.tryParse(everyNDaysMatch.group(1) ?? '');
+      if (days != null && days >= 2) return 'Cada $days días';
+    }
+    if (rule.startsWith('custom_times')) return 'Horas personalizadas';
+    return ruleRaw.trim().isEmpty ? 'Sin frecuencia' : ruleRaw;
+  }
+
+  String _formatAssistantDateLabel(String rawDate) {
+    final trimmed = rawDate.trim();
+    if (trimmed.isEmpty) return 'No definido';
+    final parsed = DateTime.tryParse(trimmed);
+    if (parsed == null) return trimmed;
+    final formatted = DateFormat("EEEE, d 'de' MMMM", 'es_ES').format(parsed);
+    if (formatted.isEmpty) return trimmed;
+    return '${formatted[0].toUpperCase()}${formatted.substring(1)}';
   }
 
   String _functionResultsToUserMessage(
@@ -1066,5 +2322,40 @@ class _ToolCall {
       'type': 'function',
       'function': {'name': name, 'arguments': jsonEncode(args)},
     };
+  }
+}
+
+class _PendingDoseOption {
+  _PendingDoseOption({
+    required this.optionId,
+    required this.medicationId,
+    required this.name,
+    required this.form,
+    required this.doseAmount,
+    required this.doseUnit,
+    required this.intakeQuantity,
+    required this.scheduledAt,
+  });
+
+  int optionId;
+  final int medicationId;
+  final String name;
+  final String form;
+  final double doseAmount;
+  final String doseUnit;
+  final int intakeQuantity;
+  final DateTime scheduledAt;
+
+  _PendingDoseOption copyWith({int? optionId}) {
+    return _PendingDoseOption(
+      optionId: optionId ?? this.optionId,
+      medicationId: medicationId,
+      name: name,
+      form: form,
+      doseAmount: doseAmount,
+      doseUnit: doseUnit,
+      intakeQuantity: intakeQuantity,
+      scheduledAt: scheduledAt,
+    );
   }
 }

@@ -16,6 +16,7 @@ class MyMedicationsScreen extends StatefulWidget {
 class _MyMedicationsScreenState extends State<MyMedicationsScreen>
     with WidgetsBindingObserver {
   final _searchController = TextEditingController();
+  final _pageController = PageController();
   int _tabIndex = 0;
   bool _loading = true;
   bool _wasKeyboardOpen = false;
@@ -38,6 +39,7 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
     );
     WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -149,7 +151,6 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
     final filtered = _filteredMeds();
     final active = filtered.where((m) => !_isFinished(m)).toList();
     final finished = filtered.where(_isFinished).toList();
-    final shown = _tabIndex == 0 ? active : finished;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF3F6FB),
@@ -177,6 +178,7 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
                   TextField(
                     controller: _searchController,
                     onChanged: (_) => setState(() {}),
+                    cursorColor: const Color(0xFF2F80ED),
                     decoration: InputDecoration(
                       hintText: 'Buscar medicamento...',
                       hintStyle: const TextStyle(
@@ -199,12 +201,12 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
                     children: [
                       Expanded(
                         child: _tabButton('Activos', _tabIndex == 0, () {
-                          setState(() => _tabIndex = 0);
+                          _selectTab(0);
                         }),
                       ),
                       Expanded(
                         child: _tabButton('Finalizados', _tabIndex == 1, () {
-                          setState(() => _tabIndex = 1);
+                          _selectTab(1);
                         }),
                       ),
                     ],
@@ -213,26 +215,22 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
               ),
             ),
             Expanded(
-              child: RefreshIndicator(
-                onRefresh: _loadMedications,
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 74),
-                  children: [
-                    if (_loading)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 40),
-                        child: Center(child: CircularProgressIndicator()),
-                      )
-                    else if (shown.isEmpty)
-                      _emptyCard(
-                        _tabIndex == 0
-                            ? 'No hay medicamentos activos.'
-                            : 'No hay medicamentos finalizados.',
-                      )
-                    else
-                      ...shown.map((m) => _medCard(m)),
-                  ],
-                ),
+              child: PageView(
+                controller: _pageController,
+                onPageChanged: (index) {
+                  if (_tabIndex == index) return;
+                  setState(() => _tabIndex = index);
+                },
+                children: [
+                  _medicationsListPage(
+                    medications: active,
+                    emptyText: 'No hay medicamentos activos.',
+                  ),
+                  _medicationsListPage(
+                    medications: finished,
+                    emptyText: 'No hay medicamentos finalizados.',
+                  ),
+                ],
               ),
             ),
           ],
@@ -255,6 +253,42 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
       final form = (m['form']?.toString() ?? '').toLowerCase();
       return name.contains(query) || form.contains(query);
     }).toList();
+  }
+
+  void _selectTab(int index) {
+    if (_tabIndex != index) {
+      setState(() => _tabIndex = index);
+    }
+    if (!_pageController.hasClients) return;
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  Widget _medicationsListPage({
+    required List<Map<String, Object?>> medications,
+    required String emptyText,
+  }) {
+    return RefreshIndicator(
+      color: const Color(0xFF2F80ED),
+      onRefresh: _loadMedications,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 74),
+        children: [
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.only(top: 40),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (medications.isEmpty)
+            _emptyCard(emptyText)
+          else
+            ...medications.map((m) => _medCard(m)),
+        ],
+      ),
+    );
   }
 
   Widget _tabButton(String text, bool selected, VoidCallback onTap) {
@@ -289,7 +323,8 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
     final dose = (medication['dose_amount'] as num?)?.toDouble() ?? 0;
     final unit = _shortUnit(medication['dose_unit']?.toString() ?? '');
     final form = medication['form']?.toString() ?? 'Dosis';
-    final hideInventory = _hideInventoryForForm(form);
+    final isIndefinite = (medication['indefinite'] as num?)?.toInt() == 1;
+    final hideInventory = _hideInventoryForForm(form) || isIndefinite;
     final frequency = _frequencyLabel(
       medication['frequency_rule']?.toString() ?? '',
     );
@@ -525,7 +560,8 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
     final unit = _shortUnit(medication['dose_unit']?.toString() ?? '');
     final formRaw = medication['form']?.toString() ?? 'Dosis';
     final form = _pluralize(formRaw);
-    final hideInventory = _hideInventoryForForm(formRaw);
+    final isIndefinite = (medication['indefinite'] as num?)?.toInt() == 1;
+    final hideInventory = _hideInventoryForForm(formRaw) || isIndefinite;
     final scheduleTitle = _scheduleTitleForForm(formRaw);
     final nextActionTitle = _nextActionTitleForForm(formRaw);
     final frequency = _frequencyLabel(
@@ -921,6 +957,9 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
 
     final firstDoseAt = _firstDoseAtForMedication(medication, scheduleMinutes);
     if (firstDoseAt == null) return const [];
+    final dayInterval = _dayIntervalFromFrequencyRule(
+      medication['frequency_rule']?.toString(),
+    );
 
     final endDateRaw = medication['end_date']?.toString().trim();
     final endDate = (endDateRaw == null || endDateRaw.isEmpty)
@@ -951,6 +990,7 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
       if (candidate.isBefore(now)) {
         candidate = candidate.add(const Duration(days: 1));
       }
+      candidate = _alignToIntervalDay(candidate, firstDoseAt, dayInterval);
 
       final firstDayCandidate = DateTime(
         firstDoseAt.year,
@@ -961,15 +1001,16 @@ class _MyMedicationsScreenState extends State<MyMedicationsScreen>
       );
       if (candidate.isBefore(firstDoseAt)) {
         candidate = firstDayCandidate.isBefore(firstDoseAt)
-            ? firstDayCandidate.add(const Duration(days: 1))
+            ? firstDayCandidate.add(Duration(days: dayInterval))
             : firstDayCandidate;
+        candidate = _alignToIntervalDay(candidate, firstDoseAt, dayInterval);
       }
 
       if (endDateExclusive != null && !candidate.isBefore(endDateExclusive)) {
         continue;
       }
       while (takenKeys.contains(_dateTimeKey(candidate))) {
-        candidate = candidate.add(const Duration(days: 1));
+        candidate = candidate.add(Duration(days: dayInterval));
       }
       if (endDateExclusive != null && !candidate.isBefore(endDateExclusive)) {
         continue;
@@ -1123,9 +1164,43 @@ String _frequencyLabel(String rule) {
   if (rule == 'every_12_hours') return 'Cada 12 horas';
   if (rule == 'every_8_hours') return 'Cada 8 horas';
   if (rule == 'every_6_hours') return 'Cada 6 horas';
+  final everyNDaysMatch = RegExp(r'^every_(\d+)_days$').firstMatch(rule);
+  if (everyNDaysMatch != null) {
+    final days = int.tryParse(everyNDaysMatch.group(1) ?? '');
+    if (days != null && days >= 2) return 'Cada $days días';
+  }
   if (rule.startsWith('custom_times')) return 'Horas personalizadas';
   if (rule.trim().isEmpty) return 'Sin frecuencia';
   return rule;
+}
+
+int _dayIntervalFromFrequencyRule(String? rawRule) {
+  final rule = (rawRule ?? '').trim().toLowerCase();
+  final match = RegExp(r'^every_(\d+)_days$').firstMatch(rule);
+  if (match == null) return 1;
+  final parsed = int.tryParse(match.group(1) ?? '');
+  if (parsed == null || parsed < 2) return 1;
+  return parsed;
+}
+
+DateTime _alignToIntervalDay(
+  DateTime candidate,
+  DateTime firstDoseAt,
+  int dayInterval,
+) {
+  if (dayInterval <= 1) return candidate;
+  final candidateDay = DateTime(candidate.year, candidate.month, candidate.day);
+  final firstDay = DateTime(
+    firstDoseAt.year,
+    firstDoseAt.month,
+    firstDoseAt.day,
+  );
+  if (candidateDay.isBefore(firstDay)) return candidate;
+  final dayDiff = candidateDay.difference(firstDay).inDays;
+  final remainder = dayDiff % dayInterval;
+  if (remainder == 0) return candidate;
+  final addDays = dayInterval - remainder;
+  return candidate.add(Duration(days: addDays));
 }
 
 String _scheduleTitleForForm(String form) {

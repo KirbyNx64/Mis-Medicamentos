@@ -29,7 +29,6 @@ class NotificationsService {
       FlutterLocalNotificationsPlugin();
   final ValueNotifier<int> historyChangeToken = ValueNotifier<int>(0);
   bool _initialized = false;
-  bool _exactAlarmsPermissionRequested = false;
 
   static const _androidChannelId = 'medications_channel';
   static const _androidChannelName = 'Medicamentos';
@@ -66,12 +65,6 @@ class NotificationsService {
         _resolvedAndroidNotificationIcon = _androidNotificationIcon;
       }
     }
-    final androidPlugin = _plugin
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >();
-    await androidPlugin?.requestNotificationsPermission();
-    await _requestExactAlarmsPermission(androidPlugin);
     await _loadAndApplyReminderSoundConfiguration();
 
     _initialized = true;
@@ -132,6 +125,60 @@ class NotificationsService {
     );
   }
 
+  Future<void> showMedicationUpdated({
+    required String medicationName,
+    String? medicationForm,
+  }) async {
+    await initialize();
+
+    final androidDetails = _buildAndroidNotificationDetails(
+      importance: Importance.high,
+      priority: Priority.high,
+    );
+
+    final details = NotificationDetails(android: androidDetails);
+
+    await _plugin.show(
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: 'Medicamento actualizado',
+      body: '$medicationName • Cambios guardados correctamente',
+      notificationDetails: details,
+    );
+    await _recordNotificationShown(
+      title: 'Medicamento actualizado',
+      body: '$medicationName • Cambios guardados correctamente',
+      medicationForm: medicationForm,
+      payload: null,
+    );
+  }
+
+  Future<void> showMedicationDeleted({
+    required String medicationName,
+    String? medicationForm,
+  }) async {
+    await initialize();
+
+    final androidDetails = _buildAndroidNotificationDetails(
+      importance: Importance.high,
+      priority: Priority.high,
+    );
+
+    final details = NotificationDetails(android: androidDetails);
+
+    await _plugin.show(
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: 'Medicamento eliminado',
+      body: '$medicationName • Se eliminó del registro',
+      notificationDetails: details,
+    );
+    await _recordNotificationShown(
+      title: 'Medicamento eliminado',
+      body: '$medicationName • Se eliminó del registro',
+      medicationForm: medicationForm,
+      payload: null,
+    );
+  }
+
   Future<void> syncTodayDoseNotifications({
     required List<DoseNotificationSchedule> doses,
   }) async {
@@ -143,12 +190,6 @@ class NotificationsService {
       return;
     }
 
-    final androidPlugin = _plugin
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >();
-    await _requestExactAlarmsPermission(androidPlugin);
-
     final now = DateTime.now();
     final pending = await _plugin.pendingNotificationRequests();
     final targetById = <int, DoseNotificationSchedule>{};
@@ -159,6 +200,7 @@ class NotificationsService {
     }
 
     for (final request in pending) {
+      if (!_isDosePendingRequest(request)) continue;
       if (!targetById.containsKey(request.id)) {
         await _plugin.cancel(id: request.id);
       }
@@ -382,19 +424,47 @@ class NotificationsService {
     await initialize();
     final pending = await _plugin.pendingNotificationRequests();
     for (final request in pending) {
+      if (!_isDosePendingRequest(request)) continue;
       await _plugin.cancel(id: request.id);
     }
   }
 
-  Future<void> _requestExactAlarmsPermission(
-    AndroidFlutterLocalNotificationsPlugin? androidPlugin,
-  ) async {
-    if (_exactAlarmsPermissionRequested) return;
-    _exactAlarmsPermissionRequested = true;
+  bool _isDosePendingRequest(PendingNotificationRequest request) {
+    final payload = request.payload?.trim();
+    return payload != null && payload.startsWith('dose:');
+  }
+
+  Future<bool> requestNotificationsPermission() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return true;
+    }
+    await initialize();
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     try {
-      await androidPlugin?.requestExactAlarmsPermission();
+      final granted = await androidPlugin?.requestNotificationsPermission();
+      return granted ?? false;
     } catch (_) {
-      // Keep notifications flow resilient if permission API is unavailable.
+      return false;
+    }
+  }
+
+  Future<bool> requestExactAlarmsPermission() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return true;
+    }
+    await initialize();
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    try {
+      final granted = await androidPlugin?.requestExactAlarmsPermission();
+      return granted ?? false;
+    } catch (_) {
+      return false;
     }
   }
 

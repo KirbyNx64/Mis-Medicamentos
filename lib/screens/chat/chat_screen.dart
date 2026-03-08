@@ -125,6 +125,29 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F7FB),
       appBar: AppBar(
+        leadingWidth: 52,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 10),
+          child: Center(
+            child: Material(
+              color: Colors.white,
+              shape: const CircleBorder(),
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  padding: EdgeInsets.zero,
+                  splashRadius: 18,
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 16),
+                  color: const Color(0xFF1C2A43),
+                  tooltip: 'Atrás',
+                ),
+              ),
+            ),
+          ),
+        ),
         title: const Text(
           'Asistente IA',
           style: TextStyle(fontWeight: FontWeight.w800),
@@ -194,6 +217,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       textCapitalization: TextCapitalization.sentences,
                       keyboardType: TextInputType.multiline,
                       textInputAction: TextInputAction.newline,
+                      cursorColor: const Color(0xFF2F80ED),
                       minLines: 1,
                       maxLines: 4,
                       decoration: InputDecoration(
@@ -285,23 +309,97 @@ List<TextSpan> _markdownSpans(
   TextStyle normalStyle,
   TextStyle boldStyle,
 ) {
+  final spans = <TextSpan>[];
+  final lines = text.split('\n');
+
+  for (var i = 0; i < lines.length; i++) {
+    final line = lines[i];
+    final trimmed = line.trim();
+
+    if (trimmed == '---') {
+      spans.add(
+        TextSpan(
+          text: '────────',
+          style: normalStyle.copyWith(
+            color: normalStyle.color?.withValues(alpha: 0.55),
+          ),
+        ),
+      );
+    } else {
+      final headingMatch = RegExp(
+        r'^(#{1,6})\s+(.+)$',
+      ).firstMatch(line.trimLeft());
+      var content = line;
+      var lineStyle = normalStyle;
+
+      if (headingMatch != null) {
+        final level = headingMatch.group(1)!.length;
+        content = headingMatch.group(2)!;
+        final headingSize = switch (level) {
+          1 => 21.0,
+          2 => 19.0,
+          3 => 17.0,
+          4 => 16.0,
+          _ => 15.0,
+        };
+        lineStyle = normalStyle.copyWith(
+          fontWeight: FontWeight.w800,
+          fontSize: headingSize,
+          height: 1.25,
+          decoration: level >= 3 ? TextDecoration.underline : null,
+          decorationThickness: level >= 3 ? 1.4 : null,
+        );
+      }
+
+      spans.add(
+        TextSpan(
+          style: lineStyle,
+          children: _inlineBoldSpans(
+            content,
+            lineStyle,
+            lineStyle.copyWith(fontWeight: FontWeight.w800),
+          ),
+        ),
+      );
+    }
+
+    if (i < lines.length - 1) {
+      spans.add(TextSpan(text: '\n', style: normalStyle));
+    }
+  }
+
+  if (spans.isEmpty) {
+    spans.add(TextSpan(text: text, style: normalStyle));
+  }
+  return spans;
+}
+
+List<TextSpan> _inlineBoldSpans(
+  String text,
+  TextStyle normalStyle,
+  TextStyle boldStyle,
+) {
   final regex = RegExp(r'\*\*(.+?)\*\*', dotAll: true);
   final spans = <TextSpan>[];
   var start = 0;
 
   for (final match in regex.allMatches(text)) {
     if (match.start > start) {
-      spans.add(TextSpan(text: text.substring(start, match.start)));
+      spans.add(
+        TextSpan(text: text.substring(start, match.start), style: normalStyle),
+      );
     }
     final boldText = match.group(1);
     if (boldText != null && boldText.isNotEmpty) {
       spans.add(TextSpan(text: boldText, style: boldStyle));
+    } else {
+      spans.add(TextSpan(text: match.group(0), style: normalStyle));
     }
     start = match.end;
   }
 
   if (start < text.length) {
-    spans.add(TextSpan(text: text.substring(start)));
+    spans.add(TextSpan(text: text.substring(start), style: normalStyle));
   }
 
   if (spans.isEmpty) {

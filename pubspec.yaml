@@ -1,7 +1,7 @@
 name: mis_medicamentos
 description: "A new Flutter project."
 publish_to: 'none'
-version: 0.1.0+1
+version: 1.0.0+4002
 
 environment:
   sdk: ^3.11.0
@@ -38,3 +38,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/gpt.ico
+    - assets/icon/icon.png

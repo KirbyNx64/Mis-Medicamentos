@@ -66,6 +66,7 @@ class HistoryScreen extends StatelessWidget {
                 }
 
                 return RefreshIndicator(
+                  color: const Color(0xFF2F80ED),
                   onRefresh: () async {
                     NotificationsService.instance.historyChangeToken.value++;
                   },

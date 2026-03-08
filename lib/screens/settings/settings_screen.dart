@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:mis_medicamentos/db/local/medications_db.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:mis_medicamentos/services/ai_chat_service.dart';
 import 'package:mis_medicamentos/services/notifications_service.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -18,6 +19,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const _appVersionLabel = '1.0.0+6002';
   bool _isSigningIn = false;
   bool _isSyncingData = false;
   bool _isSigningOut = false;
@@ -27,6 +29,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isUpdatingReminders = false;
   bool _isUpdatingNotificationSound = false;
   String _notificationSoundLabel = 'Cargando...';
+  bool _isLoadingAiSettings = true;
+  bool _isSavingAiSettings = false;
+  bool _usePersonalApiKey = false;
+  bool _hasPersonalApiKey = false;
   DateTime? _lastSyncAt;
   StreamSubscription<User?>? _authSubscription;
 
@@ -61,6 +67,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _loadReminderPreference();
+    _loadAiSettings();
     _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
       if (user == null) {
         if (mounted) {
@@ -88,6 +95,171 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _remindersEnabled = enabled;
       _notificationSoundLabel = soundLabel;
     });
+  }
+
+  Future<void> _loadAiSettings() async {
+    await AiChatService.instance.loadApiKeyPreferences();
+    if (!mounted) return;
+    setState(() {
+      _usePersonalApiKey = AiChatService.instance.isUsingPersonalApiKey;
+      _hasPersonalApiKey = AiChatService.instance.hasPersonalApiKey;
+      _isLoadingAiSettings = false;
+    });
+  }
+
+  Future<String?> _showApiKeyInputDialog({required bool isEditing}) async {
+    String typedKey = '';
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          title: Text(
+            isEditing ? 'Editar API key personal' : 'Agregar API key personal',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          content: TextField(
+            autofocus: true,
+            obscureText: true,
+            enableSuggestions: false,
+            autocorrect: false,
+            cursorColor: const Color(0xFF2F80ED),
+            onChanged: (value) => typedKey = value,
+            decoration: const InputDecoration(
+              hintText: 'Ingresa tu API key',
+              border: OutlineInputBorder(),
+              focusedBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF2F80ED), width: 2),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text(
+                'Cancelar',
+                style: TextStyle(color: Colors.black),
+              ),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(typedKey),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF2F80ED),
+              ),
+              child: const Text('Guardar'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _savePersonalApiKeyFlow({required bool enableAfterSave}) async {
+    final key = await _showApiKeyInputDialog(isEditing: _hasPersonalApiKey);
+    if (key == null) return;
+    final trimmed = key.trim();
+    if (trimmed.isEmpty) {
+      await _showStatusDialog(
+        title: 'Dato requerido',
+        message: 'Debes ingresar una API key válida.',
+      );
+      return;
+    }
+
+    setState(() => _isSavingAiSettings = true);
+    try {
+      final validationError = await AiChatService.instance
+          .validatePersonalApiKey(trimmed);
+      if (validationError != null) {
+        if (!mounted) return;
+        await _showStatusDialog(title: 'Error', message: validationError);
+        return;
+      }
+
+      await AiChatService.instance.savePersonalApiKey(trimmed);
+      await AiChatService.instance.setUsePersonalApiKey(enableAfterSave);
+      if (!mounted) return;
+      setState(() {
+        _hasPersonalApiKey = true;
+        _usePersonalApiKey = enableAfterSave;
+      });
+      await _showStatusDialog(message: 'API key personal guardada.');
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingAiSettings = false);
+      }
+    }
+  }
+
+  Future<void> _onUsePersonalApiKeyChanged(bool value) async {
+    if (_isSavingAiSettings || _isLoadingAiSettings) return;
+
+    if (value && !_hasPersonalApiKey) {
+      await _savePersonalApiKeyFlow(enableAfterSave: true);
+      return;
+    }
+
+    setState(() => _isSavingAiSettings = true);
+    try {
+      await AiChatService.instance.setUsePersonalApiKey(value);
+      if (!mounted) return;
+      setState(() => _usePersonalApiKey = value);
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingAiSettings = false);
+      }
+    }
+  }
+
+  Future<void> _deletePersonalApiKey() async {
+    if (_isSavingAiSettings) return;
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          title: const Text(
+            'Eliminar API key personal',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          content: const Text(
+            'Se borrará tu API key personal guardada y se volverá a usar la API key de la app.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text(
+                'Cancelar',
+                style: TextStyle(color: Colors.black),
+              ),
+            ),
+            OutlinedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFFE85050),
+                side: const BorderSide(color: Color(0xFFE85050)),
+              ),
+              child: const Text('Eliminar'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete != true) return;
+    setState(() => _isSavingAiSettings = true);
+    try {
+      await AiChatService.instance.clearPersonalApiKey();
+      if (!mounted) return;
+      setState(() {
+        _hasPersonalApiKey = false;
+        _usePersonalApiKey = false;
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingAiSettings = false);
+      }
+    }
   }
 
   Future<void> _signInWithGoogle() async {
@@ -639,13 +811,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() => _lastSyncAt = null);
       await _showStatusDialog(
         title: 'Datos eliminados',
-        message: 'Tus datos en Firestore fueron eliminados.',
+        message: 'Tus datos en la nube fueron eliminados.',
       );
     } catch (error) {
       if (!mounted) return;
       await _showStatusDialog(
         title: 'Error',
-        message: 'No se pudieron eliminar tus datos en Firestore: $error',
+        message: 'No se pudieron eliminar tus datos en la nube: $error',
       );
     } finally {
       if (mounted) {
@@ -1006,6 +1178,181 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
+                      'Asistente IA',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.1,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF6F9FE),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: const Color(0xFFE3EBF6)),
+                    ),
+                    child: Column(
+                      children: [
+                        ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          leading: Container(
+                            width: 58,
+                            height: 58,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFDCE8F8),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: const Icon(
+                              Icons.key_rounded,
+                              color: Color(0xFF2F80ED),
+                              size: 31,
+                            ),
+                          ),
+                          title: const Text(
+                            'Usar mi API key',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: Text(
+                            _isLoadingAiSettings
+                                ? 'Cargando configuración...'
+                                : _hasPersonalApiKey
+                                ? (_usePersonalApiKey
+                                      ? 'Activa: usando tu API key personal.'
+                                      : 'Guardada, pero actualmente se usa la key de la app.')
+                                : 'No hay API key personal guardada. Se usa la key de la app.',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF5F7190),
+                            ),
+                          ),
+                          trailing: _isSavingAiSettings || _isLoadingAiSettings
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFF2F80ED),
+                                  ),
+                                )
+                              : Switch(
+                                  value: _usePersonalApiKey,
+                                  onChanged: _onUsePersonalApiKeyChanged,
+                                  activeTrackColor: const Color(0xFF2F80ED),
+                                  activeThumbColor: Colors.white,
+                                ),
+                        ),
+                        const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                        ListTile(
+                          onTap: _isSavingAiSettings || _isLoadingAiSettings
+                              ? null
+                              : () => _savePersonalApiKeyFlow(
+                                  enableAfterSave: _usePersonalApiKey,
+                                ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          leading: Container(
+                            width: 58,
+                            height: 58,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFDCE8F8),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Icon(
+                              _hasPersonalApiKey
+                                  ? Icons.edit_rounded
+                                  : Icons.add_circle_outline_rounded,
+                              color: const Color(0xFF2F80ED),
+                              size: 31,
+                            ),
+                          ),
+                          title: Text(
+                            _hasPersonalApiKey
+                                ? 'Editar API key personal'
+                                : 'Agregar API key personal',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: const Text(
+                            'Tu API key se valida antes de guardarse. Obten una en groq.com',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF5F7190),
+                            ),
+                          ),
+                          trailing: const Icon(
+                            Icons.chevron_right_rounded,
+                            color: Color(0xFF98A4BA),
+                            size: 28,
+                          ),
+                        ),
+                        if (_hasPersonalApiKey) ...[
+                          const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                          Container(
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFFFF6F6),
+                              borderRadius: BorderRadius.vertical(
+                                bottom: Radius.circular(18),
+                              ),
+                            ),
+                            child: ListTile(
+                              onTap: _isSavingAiSettings || _isLoadingAiSettings
+                                  ? null
+                                  : _deletePersonalApiKey,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
+                              leading: Container(
+                                width: 58,
+                                height: 58,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFDE6E6),
+                                  borderRadius: BorderRadius.circular(18),
+                                ),
+                                child: const Icon(
+                                  Icons.delete_outline_rounded,
+                                  color: Color(0xFFE85050),
+                                  size: 31,
+                                ),
+                              ),
+                              title: const Text(
+                                'Eliminar API key personal',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFFB23434),
+                                ),
+                              ),
+                              subtitle: const Text(
+                                'Volverás a usar la API key de la app.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                  color: Color(0xFF8A5858),
+                                ),
+                              ),
+                              trailing: const Icon(
+                                Icons.chevron_right_rounded,
+                                color: Color(0xFFBE8D8D),
+                                size: 28,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
                       'Datos de la App',
                       style: TextStyle(
                         fontSize: 16,
@@ -1164,6 +1511,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ],
+                  const SizedBox(height: 30),
+                  const Text(
+                    'Mis Medicamentos v$_appVersionLabel',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF70819A),
+                    ),
+                  ),
                 ],
               );
             },

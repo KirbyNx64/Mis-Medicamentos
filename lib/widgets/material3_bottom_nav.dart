@@ -17,20 +17,27 @@ class _Material3BottomNavState extends State<Material3BottomNav> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: IndexedStack(index: _selectedIndex, children: _buildPages()),
-      bottomNavigationBar: NavigationBar(
-        animationDuration: const Duration(seconds: 1),
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        indicatorColor: Theme.of(context).colorScheme.primaryContainer,
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) {
-          setState(() {
-            _selectedIndex = index;
-          });
-        },
-        destinations: _navBarItems(context),
+    return PopScope(
+      canPop: _selectedIndex == 0,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop || _selectedIndex == 0) return;
+        setState(() => _selectedIndex = 0);
+      },
+      child: Scaffold(
+        body: IndexedStack(index: _selectedIndex, children: _buildPages()),
+        bottomNavigationBar: NavigationBar(
+          animationDuration: const Duration(seconds: 1),
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.white,
+          indicatorColor: Theme.of(context).colorScheme.primaryContainer,
+          selectedIndex: _selectedIndex,
+          onDestinationSelected: (index) {
+            setState(() {
+              _selectedIndex = index;
+            });
+          },
+          destinations: _navBarItems(context),
+        ),
       ),
     );
   }
@@ -48,8 +55,13 @@ class _Material3BottomNavState extends State<Material3BottomNav> {
     final selectedIconColor = const Color(0xFF2F80ED);
     return <NavigationDestination>[
       NavigationDestination(
-        icon: const Icon(Icons.home_outlined),
-        selectedIcon: Icon(Icons.home_rounded, color: selectedIconColor),
+        icon: const Icon(Symbols.home, weight: 600),
+        selectedIcon: Icon(
+          Symbols.home,
+          fill: 1,
+          weight: 600,
+          color: selectedIconColor,
+        ),
         label: 'Inicio',
       ),
       NavigationDestination(
