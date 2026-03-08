@@ -1,4 +1,7 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:mis_medicamentos/services/ai_chat_service.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -9,23 +12,120 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  static const List<String> _welcomeOptions = [
+    'Hola, soy tu asistente. Puedes escribirme algo como: "Agéndame paracetamol cada 8 horas".',
+    '¡Hola! Estoy aquí para ayudarte con tus medicamentos. Ejemplo: "Recuérdame ibuprofeno cada 12 horas".',
+    'Bienvenido. Si quieres, puedo ayudarte a agendar una medicina paso a paso.',
+    'Hola, cuéntame qué medicamento necesitas organizar y te ayudo a programarlo.',
+    '¡Hola! Puedo ayudarte con dosis, horarios y recordatorios de tus medicamentos.',
+    'Hola, ¿quieres que agendemos un medicamento ahora mismo?',
+    '¡Bienvenido! Puedo ayudarte a crear un horario de tomas claro y ordenado.',
+    'Hola, si me dices el medicamento y la frecuencia, te ayudo a programarlo.',
+    'Estoy listo para ayudarte con tus recordatorios de medicamentos.',
+    '¡Hola! También puedo ayudarte si olvidaste una dosis.',
+    'Cuéntame qué necesitas: agendar, editar o eliminar un medicamento.',
+    'Hola, puedo ayudarte a organizar tus tomas por hora y por día.',
+    'Si quieres, empezamos con el nombre del medicamento y la primera dosis.',
+    '¡Hola! Puedo guiarte paso a paso para crear tu tratamiento.',
+    'Estoy aquí para resolver dudas sobre horarios, dosis y uso general.',
+    'Hola, dime qué medicamento tomas y te ayudo a dejarlo programado.',
+    'Puedes pedirme cosas como: "Agéndame amoxicilina cada 8 horas".',
+    '¡Hola! Si ya tienes datos del medicamento, te ayudo a guardarlo rápido.',
+    'Puedo ayudarte a mantener tus tomas al día con recordatorios claros.',
+    'Hola, ¿quieres que revisemos tus pendientes de hoy?',
+    'También puedo ayudarte a marcar una toma como completada.',
+    '¡Hola! Si necesitas cambiar un horario, te ayudo a editarlo.',
+    'Estoy listo para ayudarte a organizar tu tratamiento sin complicaciones.',
+    'Hola, dime qué necesitas y lo hacemos paso a paso.',
+    'Puedes empezar escribiendo: nombre, dosis y cada cuánto lo tomas.',
+    '¡Bienvenido! Te ayudo a crear recordatorios fáciles de seguir.',
+    'Hola, si tienes dudas con la app, también te explico dónde tocar.',
+    'Puedo ayudarte a programar tratamientos diarios o cada varios días.',
+    '¡Hola! Si quieres, empezamos con la fecha y hora de la primera toma.',
+    'Estoy aquí para ayudarte a no olvidar tus medicamentos.',
+    'Hola, vamos a organizar tus medicinas de forma simple.',
+    'Si me das los datos básicos, puedo dejar tu medicamento agendado.',
+    '¡Hola! Te acompaño para configurar tus horarios de toma.',
+    'Puedo ayudarte a mantener un plan de medicación más ordenado.',
+    'Hola, ¿programamos tu próximo medicamento?',
+  ];
+
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final FlutterTts _tts = FlutterTts();
   bool _isSending = false;
-  final List<_ChatMessage> _messages = [
-    const _ChatMessage(
-      text:
-          'Hola, soy tu asistente. Puedes escribirme algo como: "Agéndame paracetamol cada 8 horas".',
-      fromUser: false,
-    ),
-  ];
+  int? _speakingAssistantIndex;
+  late final List<_ChatMessage> _messages;
+
+  @override
+  void initState() {
+    super.initState();
+    final welcome = _welcomeOptions[Random().nextInt(_welcomeOptions.length)]
+        .trim();
+    _messages = [_ChatMessage(text: welcome, fromUser: false)];
+    _configureTts();
+  }
 
   @override
   void dispose() {
+    _tts.stop();
     AiChatService.instance.reset();
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _configureTts() async {
+    await _tts.setLanguage('es-ES');
+    await _tts.setSpeechRate(0.48);
+    await _tts.setPitch(1.0);
+    await _tts.awaitSpeakCompletion(true);
+    _tts.setCompletionHandler(() {
+      if (!mounted) return;
+      setState(() => _speakingAssistantIndex = null);
+    });
+    _tts.setErrorHandler((_) {
+      if (!mounted) return;
+      setState(() => _speakingAssistantIndex = null);
+    });
+    _tts.setCancelHandler(() {
+      if (!mounted) return;
+      setState(() => _speakingAssistantIndex = null);
+    });
+  }
+
+  Future<void> _toggleAssistantAudio(int messageIndex, String text) async {
+    final speakText = _ttsPlainText(text);
+    if (speakText.isEmpty) return;
+    if (_speakingAssistantIndex == messageIndex) {
+      await _tts.stop();
+      if (!mounted) return;
+      setState(() => _speakingAssistantIndex = null);
+      return;
+    }
+
+    await _tts.stop();
+    if (!mounted) return;
+    setState(() => _speakingAssistantIndex = messageIndex);
+    await _tts.speak(speakText);
+  }
+
+  String _ttsPlainText(String raw) {
+    var text = raw;
+    text = text.replaceAll(RegExp(r'^\s*#{1,6}\s*', multiLine: true), '');
+    text = text.replaceAllMapped(
+      RegExp(r'\*\*(.*?)\*\*', dotAll: true),
+      (match) => match.group(1) ?? '',
+    );
+    text = text.replaceAllMapped(
+      RegExp(r'`([^`]+)`'),
+      (match) => match.group(1) ?? '',
+    );
+    text = text.replaceAll(RegExp(r'^\s*[-*_]{3,}\s*$', multiLine: true), '');
+    text = text.replaceAll('•', '-');
+    text = text.replaceAll(RegExp(r'[ \t]+'), ' ');
+    text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    return text.trim();
   }
 
   Future<void> _sendMessage() async {
@@ -179,7 +279,12 @@ class _ChatScreenState extends State<ChatScreen> {
                   final message = _messages[index];
                   final isUser = message.fromUser;
                   if (!isUser) {
-                    return _AssistantMessageTile(message: message);
+                    return _AssistantMessageTile(
+                      message: message,
+                      isSpeaking: _speakingAssistantIndex == index,
+                      onAudioTap: () =>
+                          _toggleAssistantAudio(index, message.text),
+                    );
                   }
                   return Align(
                     alignment: Alignment.centerRight,
@@ -481,9 +586,15 @@ class _TypingBubble extends StatelessWidget {
 }
 
 class _AssistantMessageTile extends StatelessWidget {
-  const _AssistantMessageTile({required this.message});
+  const _AssistantMessageTile({
+    required this.message,
+    required this.isSpeaking,
+    required this.onAudioTap,
+  });
 
   final _ChatMessage message;
+  final bool isSpeaking;
+  final VoidCallback onAudioTap;
 
   @override
   Widget build(BuildContext context) {
@@ -538,6 +649,19 @@ class _AssistantMessageTile extends StatelessWidget {
                   border: Border.all(color: const Color(0xFFE1E8F2)),
                 ),
                 child: _MessageText(message: message),
+              ),
+              const SizedBox(height: 4),
+              IconButton(
+                tooltip: isSpeaking ? 'Detener audio' : 'Escuchar audio',
+                onPressed: onAudioTap,
+                icon: Icon(
+                  isSpeaking ? Icons.stop_circle_outlined : Icons.volume_up,
+                  color: const Color(0xFF000000).withValues(alpha: 0.75),
+                  size: 20,
+                ),
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.all(6),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
               ),
             ],
           ),

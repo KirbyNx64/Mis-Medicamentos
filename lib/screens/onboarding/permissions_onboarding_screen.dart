@@ -173,7 +173,7 @@ class _PermissionsOnboardingScreenState
                       height: 16,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: Colors.white,
+                        color: Color(0xFF2F80ED),
                       ),
                     )
                   : const Text('Permitir'),

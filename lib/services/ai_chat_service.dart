@@ -46,9 +46,12 @@ class AiChatService {
       'En Ajustes se puede iniciar sesión con Google (cuenta personal) para sincronizar/guardar datos en la nube, activar o desactivar recordatorios, cambiar tono de notificación y eliminar datos de la app. '
       'Si falta contexto para responder, pide datos concretos antes de sugerir. '
       'No des diagnosticos ni sustituyas al medico. '
+      'Deja claro que eres solo un asistente informativo y no un médico. '
+      'Si hay una emergencia o síntomas graves, indica de forma directa que debe acudir de inmediato a su médico o a un servicio de urgencias. '
       'Para casos de riesgo, embarazo, lactancia, alergias, interacciones graves o sintomas intensos, recomienda consultar a un profesional de salud. '
       'Cuando escribas horas en mensajes para el usuario, usa formato de 12 horas con AM/PM '
       '(por ejemplo 8:00 AM, 4:30 PM), no formato 24 horas. '
+      'No uses tablas (ni Markdown ni ASCII) en las respuestas; usa listas o párrafos breves. '
       'Antes de agendar, solicita siempre el tipo de medicamento (forma farmacéutica) y la vía de administración. '
       'Si el usuario ya proporcionó un dato, no lo vuelvas a pedir; solicita únicamente los faltantes. '
       'Usa solo estas formas farmacéuticas válidas: Tableta, Cápsula, Jarabe, Inyección, Gotas, Crema, Polvo, Spray, Inhalador, Parche, Supositorio. '
@@ -253,9 +256,10 @@ class AiChatService {
         if (text == null || text.isEmpty) {
           return 'No pude generar una respuesta. Intenta de nuevo.';
         }
-        _history.add({'role': 'assistant', 'content': text});
+        final processedText = _postProcessAssistantText(text);
+        _history.add({'role': 'assistant', 'content': processedText});
         _trimHistory();
-        return _normalizeAssistantTimeFormat(text);
+        return processedText;
       }
 
       _history.add({
@@ -2038,6 +2042,80 @@ class AiChatService {
       final suffix = isPm ? 'PM' : 'AM';
       return '$hour12:$minuteText $suffix';
     });
+  }
+
+  String _postProcessAssistantText(String text) {
+    final withoutTables = _convertMarkdownTablesToBullets(text);
+    return _normalizeAssistantTimeFormat(withoutTables);
+  }
+
+  String _convertMarkdownTablesToBullets(String text) {
+    final lines = text.split('\n');
+    final output = <String>[];
+    var i = 0;
+
+    while (i < lines.length) {
+      if (i + 1 < lines.length &&
+          _looksLikeTableRow(lines[i]) &&
+          _isMarkdownTableSeparator(lines[i + 1])) {
+        final headers = _parseTableCells(lines[i]);
+        i += 2;
+
+        while (i < lines.length && _looksLikeTableRow(lines[i])) {
+          final cells = _parseTableCells(lines[i]);
+          if (cells.isEmpty) {
+            i++;
+            continue;
+          }
+
+          if (headers.length == cells.length && headers.isNotEmpty) {
+            final pairs = <String>[];
+            for (var j = 0; j < cells.length; j++) {
+              pairs.add('${headers[j]}: ${cells[j]}');
+            }
+            output.add('- ${pairs.join('; ')}');
+          } else {
+            output.add('- ${cells.join(' | ')}');
+          }
+          i++;
+        }
+        continue;
+      }
+
+      output.add(lines[i]);
+      i++;
+    }
+
+    return output.join('\n');
+  }
+
+  bool _looksLikeTableRow(String line) {
+    if (!line.contains('|')) return false;
+    return _parseTableCells(line).length >= 2;
+  }
+
+  bool _isMarkdownTableSeparator(String line) {
+    var trimmed = line.trim();
+    if (trimmed.startsWith('|')) {
+      trimmed = trimmed.substring(1);
+    }
+    if (trimmed.endsWith('|')) {
+      trimmed = trimmed.substring(0, trimmed.length - 1);
+    }
+    final parts = trimmed.split('|').map((part) => part.trim()).toList();
+    if (parts.isEmpty) return false;
+    return parts.every((part) => RegExp(r'^:?-{3,}:?$').hasMatch(part));
+  }
+
+  List<String> _parseTableCells(String line) {
+    var trimmed = line.trim();
+    if (trimmed.startsWith('|')) {
+      trimmed = trimmed.substring(1);
+    }
+    if (trimmed.endsWith('|')) {
+      trimmed = trimmed.substring(0, trimmed.length - 1);
+    }
+    return trimmed.split('|').map((cell) => cell.trim()).toList();
   }
 
   String _functionResultToUserMessage(
