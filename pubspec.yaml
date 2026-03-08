@@ -39,4 +39,6 @@ flutter:
   uses-material-design: true
   assets:
     - assets/gpt.ico
+    - assets/google_logo.ico
+    - assets/groq.ico
     - assets/icon/icon.png

@@ -54,6 +54,9 @@ class AiChatService {
       'Cuando escribas horas en mensajes para el usuario, usa formato de 12 horas con AM/PM '
       '(por ejemplo 8:00 AM, 4:30 PM), no formato 24 horas. '
       'No uses tablas (ni Markdown ni ASCII) en las respuestas; usa listas o párrafos breves. '
+      'Nunca muestres nombres de campos técnicos, claves JSON o parámetros internos '
+      '(por ejemplo duration_days, frequency_rule, start_date, indefinite). '
+      'Si falta un dato, pídeselo al usuario con lenguaje simple y cotidiano. '
       'Antes de agendar, solicita siempre el tipo de medicamento (forma farmacéutica) y la vía de administración. '
       'Si el usuario ya proporcionó un dato, no lo vuelvas a pedir; solicita únicamente los faltantes. '
       'Usa solo estas formas farmacéuticas válidas: Tableta, Cápsula, Jarabe, Inyección, Gotas, Crema, Polvo, Spray, Inhalador, Parche, Supositorio. '
@@ -2194,7 +2197,7 @@ class AiChatService {
     final ok = result['ok'] == true;
     if (!ok) {
       final error = (result['error']?.toString() ?? 'Dato faltante').trim();
-      return 'Para continuar, necesito este dato: $error';
+      return _friendlyToolErrorForUser(error);
     }
 
     if (functionName == 'agendar_medicamento') {
@@ -2254,6 +2257,58 @@ class AiChatService {
     }
 
     return 'Listo. Acción completada.';
+  }
+
+  String _friendlyToolErrorForUser(String rawError) {
+    final error = rawError.trim();
+    final lower = error.toLowerCase();
+
+    if (lower.contains('duration_days es obligatorio')) {
+      return 'Para continuar: ¿cuántos días durará el tratamiento? Si es de por vida, también puedo dejarlo sin fecha de finalización.';
+    }
+    if (lower.contains('total_units es obligatorio')) {
+      return 'Para continuar: ¿cuántas unidades tienes en total de este medicamento?';
+    }
+    if (lower.contains('name es obligatorio')) {
+      return 'Para continuar: ¿cuál es el nombre del medicamento?';
+    }
+    if (lower.contains('dose_amount debe ser mayor que 0')) {
+      return 'Para continuar: ¿qué cantidad corresponde en cada toma o aplicación?';
+    }
+    if (lower.contains('dose_unit es obligatorio')) {
+      return 'Para continuar: ¿en qué unidad va la dosis (por ejemplo mg, ml, gotas o puffs)?';
+    }
+    if (lower.contains('form es obligatorio')) {
+      return 'Para continuar: ¿qué tipo de medicamento es (tableta, cápsula, jarabe, crema, etc.)?';
+    }
+    if (lower.contains('form no válido')) {
+      return 'Para continuar: dime el tipo de medicamento usando una opción común como tableta, cápsula, jarabe, inyección, gotas, crema, polvo, spray, inhalador, parche o supositorio.';
+    }
+    if (lower.contains('route es obligatorio')) {
+      return 'Para continuar: ¿por qué vía se administra (oral, tópica, inhalatoria, etc.)?';
+    }
+    if (lower.contains('frequency_rule es obligatorio')) {
+      return 'Para continuar: ¿cada cuánto debes tomarlo o aplicarlo?';
+    }
+    if (lower.contains('frequency_rule no válido')) {
+      return 'Para continuar: indícame la frecuencia en palabras simples, por ejemplo "cada 8 horas", "cada 12 horas" o "cada 2 días".';
+    }
+    if (lower.contains('first_dose_time debe tener formato')) {
+      return 'Para continuar: ¿a qué hora será la primera dosis?';
+    }
+    if (lower.contains('start_date es obligatorio')) {
+      return 'Para continuar: ¿en qué fecha iniciarás el tratamiento?';
+    }
+    if (lower.contains('start_date debe tener formato')) {
+      return 'Para continuar: indícame la fecha de inicio en formato YYYY-MM-DD, por ejemplo 2026-03-08.';
+    }
+    if (lower.contains('no se pudo calcular el horario')) {
+      return 'No pude calcular el horario con esos datos. ¿Quieres que lo configure cada 8, 12 o 24 horas?';
+    }
+
+    return error.isEmpty
+        ? 'Para continuar, me falta un dato importante.'
+        : 'Para continuar, me falta este dato: $error';
   }
 
   String _buildMedicationSummaryMessage({

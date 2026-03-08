@@ -917,7 +917,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   strokeWidth: 2,
                                 ),
                               )
-                            : const Icon(Icons.login_rounded, size: 20),
+                            : Image.asset(
+                                'assets/google_logo.ico',
+                                width: 20,
+                                height: 20,
+                              ),
                         label: Text(
                           _isSigningIn
                               ? 'Iniciando sesión...'
