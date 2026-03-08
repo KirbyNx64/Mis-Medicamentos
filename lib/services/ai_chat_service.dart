@@ -12,11 +12,13 @@ class AiChatService {
 
   static final AiChatService instance = AiChatService._();
 
-  static const _defaultModelName = 'openai/gpt-oss-120b';
-  static const _configuredModelName = String.fromEnvironment(
-    'GROQ_MODEL',
-    defaultValue: _defaultModelName,
-  );
+  static const List<String> _prioritizedTextModels = [
+    'openai/gpt-oss-120b',
+    'meta-llama/llama-4-scout-17b-16e-instruct',
+    'moonshotai/kimi-k2-instruct-0905',
+    'qwen/qwen3-32b',
+    'llama-3.3-70b-versatile',
+  ];
   static const _configuredVisionModel = String.fromEnvironment(
     'GROQ_VISION_MODEL',
     defaultValue: '',
@@ -74,7 +76,6 @@ class AiChatService {
   final List<Map<String, Object?>> _history = [];
   final List<DateTime> _recentRequestTimestamps = [];
   final Map<int, _PendingDoseOption> _pendingDoseOptionsById = {};
-  String _activeModelName = _configuredModelName;
   bool _preferencesLoaded = false;
   bool _usePersonalApiKey = false;
   String _personalApiKey = '';
@@ -123,11 +124,6 @@ class AiChatService {
       return 'Falta configurar la API key de Groq. Inicia la app con '
           '--dart-define=GROQ_API_KEY=TU_API_KEY o guarda tu API key personal en Ajustes.';
     }
-    _activeModelName = _activeModelName.trim();
-    if (_activeModelName.trim().isEmpty) {
-      _activeModelName = _defaultModelName;
-    }
-
     try {
       return await _sendWithTools(
         message,
@@ -151,9 +147,6 @@ class AiChatService {
   }
 
   void reset() {
-    _activeModelName = _configuredModelName.trim().isEmpty
-        ? _defaultModelName
-        : _configuredModelName.trim();
     _history.clear();
     _pendingDoseOptionsById.clear();
     _quotaBlockedUntil = null;
@@ -192,20 +185,38 @@ class AiChatService {
     if (trimmedKey.isEmpty) {
       return 'La API key está vacía.';
     }
-    if (_activeModelName.trim().isEmpty) {
-      _activeModelName = _defaultModelName;
-    }
-
     try {
-      await _createChatCompletion(
-        _activeModelName,
-        apiKey: trimmedKey,
-        includeTools: false,
-        overrideMessages: const [
-          {'role': 'user', 'content': 'Responde con OK'},
-        ],
-        maxTokens: 4,
-      );
+      String? lastRetryableModelError;
+      for (final model in _textModelsForFailover()) {
+        try {
+          await _createChatCompletion(
+            model,
+            apiKey: trimmedKey,
+            includeTools: false,
+            overrideMessages: const [
+              {'role': 'user', 'content': 'Responde con OK'},
+            ],
+            maxTokens: 4,
+          );
+          return null;
+        } catch (error) {
+          final raw = error.toString();
+          if (raw.contains('401') || raw.toLowerCase().contains('invalid')) {
+            return 'La API key no es válida.';
+          }
+          if (_isRetryableModelFailoverError(raw)) {
+            lastRetryableModelError = raw;
+            continue;
+          }
+          if (raw.contains('429')) {
+            return 'La API key está válida pero alcanzó su límite temporal.';
+          }
+          return 'No se pudo validar la API key: $raw';
+        }
+      }
+      if (lastRetryableModelError != null) {
+        return 'La API key parece válida, pero ninguno de los modelos priorizados respondió.';
+      }
       return null;
     } catch (error) {
       final raw = error.toString();
@@ -226,12 +237,59 @@ class AiChatService {
     String? imageMimeType,
   }) async {
     final hasImage = imageBytes != null && imageBytes.isNotEmpty;
-    final requestModel = _resolveModelForRequest(hasImage: hasImage);
-    if (requestModel == null) {
+    final requestModels = _resolveModelsForRequest(hasImage: hasImage);
+    if (requestModels.isEmpty) {
       return 'Para enviar fotos necesitas configurar un modelo multimodal en Groq. '
           'Inicia la app con --dart-define=GROQ_VISION_MODEL=TU_MODELO_CON_VISION';
     }
 
+    String? lastQuotaError;
+    String? lastRetryableModelError;
+    for (final requestModel in requestModels) {
+      try {
+        final response = await _sendWithToolsOnModel(
+          userMessage,
+          apiKey: apiKey,
+          model: requestModel,
+          imageBytes: imageBytes,
+          imageMimeType: imageMimeType,
+        );
+        return response;
+      } catch (error) {
+        final rawError = error.toString();
+        if (_isQuotaError(rawError)) {
+          lastQuotaError = rawError;
+          continue;
+        }
+        if (_isRetryableModelFailoverError(rawError)) {
+          lastRetryableModelError = rawError;
+          continue;
+        }
+        rethrow;
+      }
+    }
+
+    if (lastQuotaError != null) {
+      throw Exception(lastQuotaError);
+    }
+    if (lastRetryableModelError != null) {
+      throw Exception(
+        'Ninguno de los modelos priorizados respondió correctamente. '
+        'Detalle: $lastRetryableModelError',
+      );
+    }
+    throw Exception(
+      'No fue posible obtener respuesta de los modelos configurados.',
+    );
+  }
+
+  Future<String> _sendWithToolsOnModel(
+    String userMessage, {
+    required String apiKey,
+    required String model,
+    Uint8List? imageBytes,
+    String? imageMimeType,
+  }) async {
     final baseLength = _history.length;
     final modelReadyUserMessage = _enhanceUserMessageForModel(userMessage);
     final userContent = _buildUserContent(
@@ -247,7 +305,7 @@ class AiChatService {
 
     try {
       final assistantMessage = await _createChatCompletion(
-        requestModel,
+        model,
         apiKey: apiKey,
       );
       final calls = _extractToolCalls(assistantMessage);
@@ -290,11 +348,22 @@ class AiChatService {
     }
   }
 
-  String? _resolveModelForRequest({required bool hasImage}) {
-    if (!hasImage) return _activeModelName;
+  List<String> _resolveModelsForRequest({required bool hasImage}) {
+    if (!hasImage) return _textModelsForFailover();
     final visionModel = _configuredVisionModel.trim();
-    if (visionModel.isNotEmpty) return visionModel;
-    return null;
+    if (visionModel.isNotEmpty) return [visionModel];
+    return const [];
+  }
+
+  List<String> _textModelsForFailover() {
+    final candidates = _prioritizedTextModels;
+    final models = <String>[];
+    for (final rawModel in candidates) {
+      final model = rawModel.trim();
+      if (model.isEmpty || models.contains(model)) continue;
+      models.add(model);
+    }
+    return models;
   }
 
   Object? _buildUserContent({
@@ -2339,6 +2408,36 @@ class AiChatService {
             message.contains('unsupported') ||
             message.contains('invalid image') ||
             message.contains('vision'));
+  }
+
+  bool _isRetryableModelFailoverError(String rawError) {
+    final message = rawError.toLowerCase();
+    if (message.contains('groq api error 404') ||
+        message.contains('groq api error 408') ||
+        message.contains('groq api error 500') ||
+        message.contains('groq api error 502') ||
+        message.contains('groq api error 503') ||
+        message.contains('groq api error 504')) {
+      return true;
+    }
+    if (message.contains('temporarily unavailable') ||
+        message.contains('timeout') ||
+        message.contains('upstream error') ||
+        message.contains('overloaded') ||
+        message.contains('capacity')) {
+      return true;
+    }
+    if (message.contains('model') &&
+        (message.contains('not found') ||
+            message.contains('does not exist') ||
+            message.contains('unsupported') ||
+            message.contains('not support') ||
+            message.contains('decommissioned') ||
+            message.contains('not active') ||
+            message.contains('not available'))) {
+      return true;
+    }
+    return false;
   }
 
   void _setQuotaCooldown(String rawError) {

@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:material_symbols_icons/material_symbols_icons.dart';
 import 'package:mis_medicamentos/services/ai_chat_service.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -186,12 +187,7 @@ class _ChatScreenState extends State<ChatScreen> {
           title: const Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Image(
-                image: AssetImage('assets/gpt.ico'),
-                width: 38,
-                height: 38,
-                fit: BoxFit.contain,
-              ),
+              Icon(Symbols.robot_2, size: 38, weight: 600),
               SizedBox(height: 10),
               Text(
                 'Cómo usar el asistente IA',
@@ -204,7 +200,7 @@ class _ChatScreenState extends State<ChatScreen> {
             'Puedes escribir en lenguaje natural para agendar medicamentos.\n\n'
             'Ejemplo: "Quiero agendar Ambroxol cada 8 horas, 10 ml, jarabe, primera dosis 8:00 AM, inicio 2026-03-07".\n\n'
             'El asistente te pedirá datos faltantes y, cuando estén completos, guardará el medicamento automáticamente.\n\n'
-            'Powered by ChatGPT of OpenAI.',
+            'Powered by Groq AI.',
           ),
           actions: [
             TextButton(
@@ -530,14 +526,7 @@ class _TypingBubble extends StatelessWidget {
             shape: BoxShape.circle,
           ),
           alignment: Alignment.center,
-          child: ClipOval(
-            child: Image.asset(
-              'assets/gpt.ico',
-              width: 30,
-              height: 30,
-              fit: BoxFit.cover,
-            ),
-          ),
+          child: const Icon(Symbols.robot_2, size: 26, weight: 600),
         ),
         const SizedBox(width: 8),
         Expanded(
@@ -547,7 +536,7 @@ class _TypingBubble extends StatelessWidget {
               const Padding(
                 padding: EdgeInsets.only(top: 4, left: 2),
                 child: Text(
-                  'ChatGPT',
+                  'Asistente IA',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
@@ -609,14 +598,7 @@ class _AssistantMessageTile extends StatelessWidget {
             shape: BoxShape.circle,
           ),
           alignment: Alignment.center,
-          child: ClipOval(
-            child: Image.asset(
-              'assets/gpt.ico',
-              width: 30,
-              height: 30,
-              fit: BoxFit.cover,
-            ),
-          ),
+          child: const Icon(Symbols.robot_2, size: 26, weight: 600),
         ),
         const SizedBox(width: 8),
         Expanded(
@@ -626,7 +608,7 @@ class _AssistantMessageTile extends StatelessWidget {
               const Padding(
                 padding: EdgeInsets.only(top: 4, left: 2),
                 child: Text(
-                  'ChatGPT',
+                  'Asistente IA',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,

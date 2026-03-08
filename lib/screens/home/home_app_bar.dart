@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:material_symbols_icons/material_symbols_icons.dart';
 import 'package:mis_medicamentos/screens/chat/chat_screen.dart';
 
 class HomeAppBar extends StatelessWidget implements PreferredSizeWidget {
@@ -94,11 +95,10 @@ class HomeAppBar extends StatelessWidget implements PreferredSizeWidget {
                   MaterialPageRoute<void>(builder: (_) => const ChatScreen()),
                 );
               },
-              icon: Image.asset(
-                'assets/gpt.ico',
-                width: 34,
-                height: 34,
-                fit: BoxFit.contain,
+              icon: const Icon(
+                Symbols.robot_2,
+                size: 28,
+                weight: 600,
               ),
               iconSize: 22,
               constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
