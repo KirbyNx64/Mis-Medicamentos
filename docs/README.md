@@ -8,6 +8,7 @@ This repository includes a privacy policy site for publication with GitHub Pages
 
 - Main page: `docs/index.html`
 - Policy page: `docs/privacy-policy.html`
+- AI terms page: `docs/ai-terms-of-use.html`
 
 ### Publish steps
 
@@ -22,3 +23,7 @@ This repository includes a privacy policy site for publication with GitHub Pages
 Your privacy policy URL will be:
 
 `https://<your-github-username>.github.io/<your-repo-name>/privacy-policy.html`
+
+Your AI terms URL will be:
+
+`https://<your-github-username>.github.io/<your-repo-name>/ai-terms-of-use.html`
