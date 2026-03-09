@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:mis_medicamentos/db/local/medications_db.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:mis_medicamentos/services/ai_chat_service.dart';
+import 'package:mis_medicamentos/services/connectivity_service.dart';
 import 'package:mis_medicamentos/services/notifications_service.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -44,6 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
+          backgroundColor: Colors.white,
           title: Text(
             title,
             style: const TextStyle(fontWeight: FontWeight.w700),
@@ -166,6 +168,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
 
+    final hasInternet = await ConnectivityService.instance
+        .hasInternetConnection();
+    if (!hasInternet) {
+      if (!mounted) return;
+      await _showStatusDialog(
+        title: 'Sin conexión',
+        message:
+            'No hay conexión a internet. Conéctate para verificar tu API key personal.',
+      );
+      return;
+    }
+
     setState(() => _isSavingAiSettings = true);
     try {
       final validationError = await AiChatService.instance
@@ -265,6 +279,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _signInWithGoogle() async {
     if (_isSigningIn) return;
 
+    final hasInternet = await ConnectivityService.instance
+        .hasInternetConnection();
+    if (!hasInternet) {
+      if (!mounted) return;
+      await _showStatusDialog(
+        title: 'Sin conexión',
+        message:
+            'No hay conexión a internet. Verifica tu red e inténtalo de nuevo.',
+      );
+      return;
+    }
+
     setState(() => _isSigningIn = true);
 
     try {
@@ -308,12 +334,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _syncDataToFirestore() async {
     if (_isSyncingData) return;
 
+    final hasInternet = await ConnectivityService.instance
+        .hasInternetConnection();
+    if (!hasInternet) {
+      if (!mounted) return;
+      await _showStatusDialog(
+        title: 'Sin conexión',
+        message:
+            'No hay conexión a internet. Verifica tu red e inténtalo de nuevo.',
+      );
+      return;
+    }
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
+      if (!mounted) return;
       await showDialog<void>(
         context: context,
         builder: (context) {
           return AlertDialog(
+            backgroundColor: Colors.white,
             title: const Text(
               'Inicia sesión',
               style: TextStyle(fontWeight: FontWeight.w700),
@@ -765,6 +805,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _deleteFirestoreData() async {
     if (_isDeletingCloudData) return;
 
+    final hasInternet = await ConnectivityService.instance
+        .hasInternetConnection();
+    if (!hasInternet) {
+      if (!mounted) return;
+      await _showStatusDialog(
+        title: 'Sin conexión',
+        message:
+            'No hay conexión a internet. Verifica tu red e inténtalo de nuevo.',
+      );
+      return;
+    }
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       await _showStatusDialog(
@@ -853,6 +905,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 context: context,
                 builder: (context) {
                   return AlertDialog(
+                    backgroundColor: Colors.white,
                     title: const Text(
                       'Cómo funciona la sincronización',
                       style: TextStyle(fontWeight: FontWeight.w700),
@@ -958,11 +1011,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           child: Container(
                             decoration: const BoxDecoration(
                               shape: BoxShape.circle,
-                              gradient: LinearGradient(
-                                colors: [Color(0xFFEFE7DA), Color(0xFFD8E2EE)],
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                              ),
+                              color: Color(0xFFE3EBF6),
                             ),
                             child:
                                 (user.photoURL != null &&
@@ -971,6 +1020,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     child: Image.network(
                                       user.photoURL!,
                                       fit: BoxFit.cover,
+                                      errorBuilder: (_, _, _) {
+                                        return const Icon(
+                                          Icons.person_rounded,
+                                          size: 74,
+                                          color: Color(0xFF4D5B73),
+                                        );
+                                      },
                                     ),
                                   )
                                 : const Icon(

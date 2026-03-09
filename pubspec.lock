@@ -113,6 +113,22 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.19.1"
+  connectivity_plus:
+    dependency: "direct main"
+    description:
+      name: connectivity_plus
+      sha256: "33bae12a398f841c6cda09d1064212957265869104c478e5ad51e2fb26c3973c"
+      url: "https://pub.dev"
+    source: hosted
+    version: "7.0.0"
+  connectivity_plus_platform_interface:
+    dependency: transitive
+    description:
+      name: connectivity_plus_platform_interface
+      sha256: "42657c1715d48b167930d5f34d00222ac100475f73d10162ddf43e714932f204"
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.1"
   cross_file:
     dependency: transitive
     description:
@@ -381,14 +397,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.2"
-  googleai_dart:
-    dependency: "direct main"
-    description:
-      name: googleai_dart
-      sha256: b302188c0972d6cfe9e69ea28b9ebed33a683072f453179a7c0a601561cf1229
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.3.1"
   hooks:
     dependency: "direct main"
     description:
@@ -589,6 +597,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.17.5"
+  nm:
+    dependency: transitive
+    description:
+      name: nm
+      sha256: "2c9aae4127bdc8993206464fcc063611e0e36e72018696cd9631023a31b24254"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.5.0"
   objective_c:
     dependency: transitive
     description:
@@ -597,6 +613,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "9.3.0"
+  open_settings_plus:
+    dependency: "direct main"
+    description:
+      name: open_settings_plus
+      sha256: "17c5d1c90affd224b0c19ee3dc5bbcff39b630889a90912ba1441c7e821fa914"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.4.2"
   path:
     dependency: "direct main"
     description:
@@ -890,14 +914,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.1"
-  web_socket:
-    dependency: transitive
-    description:
-      name: web_socket
-      sha256: "34d64019aa8e36bf9842ac014bb5d2f5586ca73df5e4d9bf5c936975cae6982c"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.0.1"
   xdg_directories:
     dependency: transitive
     description:

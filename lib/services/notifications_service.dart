@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/services.dart';
@@ -5,6 +7,11 @@ import 'package:mis_medicamentos/db/local/medications_db.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
+
+@pragma('vm:entry-point')
+void notificationTapBackground(NotificationResponse response) {
+  unawaited(NotificationsService.instance.handleNotificationResponse(response));
+}
 
 class DoseNotificationSchedule {
   const DoseNotificationSchedule({
@@ -40,6 +47,9 @@ class NotificationsService {
   static const _doseReminderSoundUriKey = 'dose_reminder_sound_uri';
   static const _soundPickerChannelName = 'mis_medicamentos/system_sound';
   static const _defaultSoundLabel = 'Predeterminado del sistema';
+  static const _dosePayloadPrefix = 'dose:';
+  static const _actionMarkDoseTaken = 'dose_mark_taken';
+  static const _actionSnoozeDose = 'dose_snooze_10m';
   String _resolvedAndroidNotificationIcon = _androidNotificationIcon;
   String _resolvedAndroidChannelId = _androidChannelId;
   String? _selectedReminderSoundUri;
@@ -212,6 +222,18 @@ class NotificationsService {
         android: _buildAndroidNotificationDetails(
           importance: Importance.high,
           priority: Priority.high,
+          actions: const [
+            AndroidNotificationAction(
+              _actionMarkDoseTaken,
+              'Marcar completa',
+              cancelNotification: true,
+            ),
+            AndroidNotificationAction(
+              _actionSnoozeDose,
+              'Posponer 10 min',
+              cancelNotification: true,
+            ),
+          ],
         ),
       );
 
@@ -222,7 +244,7 @@ class NotificationsService {
         androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         title: 'Es hora de tu medicamento',
         body: '${dose.medicationName} • ${_formatTime(dose.scheduledAt)}',
-        payload: 'dose:${dose.key}',
+        payload: '$_dosePayloadPrefix${dose.key}',
       );
       await _recordDoseReminderScheduled(dose);
     }
@@ -431,7 +453,7 @@ class NotificationsService {
 
   bool _isDosePendingRequest(PendingNotificationRequest request) {
     final payload = request.payload?.trim();
-    return payload != null && payload.startsWith('dose:');
+    return payload != null && payload.startsWith(_dosePayloadPrefix);
   }
 
   Future<bool> requestNotificationsPermission() async {
@@ -473,12 +495,17 @@ class NotificationsService {
     final initializationSettings = InitializationSettings(
       android: androidSettings,
     );
-    await _plugin.initialize(settings: initializationSettings);
+    await _plugin.initialize(
+      settings: initializationSettings,
+      onDidReceiveNotificationResponse: handleNotificationResponse,
+      onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
+    );
   }
 
   AndroidNotificationDetails _buildAndroidNotificationDetails({
     required Importance importance,
     required Priority priority,
+    List<AndroidNotificationAction> actions = const [],
   }) {
     return AndroidNotificationDetails(
       _resolvedAndroidChannelId,
@@ -488,6 +515,7 @@ class NotificationsService {
       importance: importance,
       priority: priority,
       sound: _androidSoundForUri(_selectedReminderSoundUri),
+      actions: actions,
     );
   }
 
@@ -577,15 +605,140 @@ class NotificationsService {
     DoseNotificationSchedule dose,
   ) async {
     await AppDatabase.instance.upsertNotificationLogByEventKey(
-      eventKey: 'dose:${dose.key}',
+      eventKey: '$_dosePayloadPrefix${dose.key}',
       title: 'Es hora de tu medicamento',
       body: '${dose.medicationName} • ${_formatTime(dose.scheduledAt)}',
       kind: 'scheduled',
       medicationForm: dose.medicationForm,
       scheduledAt: dose.scheduledAt.toIso8601String(),
-      payload: 'dose:${dose.key}',
+      payload: '$_dosePayloadPrefix${dose.key}',
     );
     historyChangeToken.value++;
+  }
+
+  Future<void> handleNotificationResponse(NotificationResponse response) async {
+    final payload = response.payload?.trim() ?? '';
+    if (!payload.startsWith(_dosePayloadPrefix)) return;
+
+    final actionId = response.actionId?.trim();
+    if (actionId == null || actionId.isEmpty) return;
+
+    final doseKey = payload.substring(_dosePayloadPrefix.length).trim();
+    final dose = _parseDoseKey(doseKey);
+    if (dose == null) return;
+
+    if (actionId == _actionMarkDoseTaken) {
+      await _handleMarkDoseTakenAction(dose);
+      return;
+    }
+    if (actionId == _actionSnoozeDose) {
+      await _handleSnoozeDoseAction(dose);
+    }
+  }
+
+  Future<void> _handleMarkDoseTakenAction(_DosePayloadData dose) async {
+    final medication = await _findMedicationById(dose.medicationId);
+    if (medication == null) return;
+
+    final medicationName = medication['name']?.toString() ?? 'Medicamento';
+    final medicationForm = medication['form']?.toString();
+    final intakeQtyRaw =
+        (medication['intake_quantity'] as num?)?.toDouble() ?? 1.0;
+    final intakeQuantity = intakeQtyRaw <= 0 ? 1 : intakeQtyRaw.ceil();
+
+    final marked = await AppDatabase.instance.markDoseAsTaken(
+      medicationId: dose.medicationId,
+      scheduledAt: dose.scheduledAt,
+      intakeQuantity: intakeQuantity,
+    );
+    if (!marked) return;
+
+    await _plugin.cancel(id: _doseNotificationId(dose.key));
+    await AppDatabase.instance.createNotificationLog({
+      'event_key': null,
+      'title': 'Toma completada',
+      'body': '$medicationName • ${_formatTime(dose.scheduledAt)}',
+      'kind': 'action_taken',
+      'medication_form': medicationForm,
+      'scheduled_at': dose.scheduledAt.toIso8601String(),
+      'payload': '$_dosePayloadPrefix${dose.key}',
+    });
+    historyChangeToken.value++;
+    await syncTodayDoseNotificationsFromDatabase();
+  }
+
+  Future<void> _handleSnoozeDoseAction(_DosePayloadData dose) async {
+    if (await _isDoseAlreadyTaken(dose)) return;
+
+    final medication = await _findMedicationById(dose.medicationId);
+    final rawName = medication?['name']?.toString().trim();
+    final medicationName = (rawName != null && rawName.isNotEmpty)
+        ? rawName
+        : 'Medicamento';
+    final medicationForm = medication?['form']?.toString();
+    final snoozedAt = DateTime.now().add(const Duration(minutes: 10));
+
+    final details = NotificationDetails(
+      android: _buildAndroidNotificationDetails(
+        importance: Importance.high,
+        priority: Priority.high,
+        actions: const [
+          AndroidNotificationAction(
+            _actionMarkDoseTaken,
+            'Marcar completa',
+            cancelNotification: true,
+          ),
+          AndroidNotificationAction(
+            _actionSnoozeDose,
+            'Posponer 10 min',
+            cancelNotification: true,
+          ),
+        ],
+      ),
+    );
+
+    await _plugin.zonedSchedule(
+      id: _doseNotificationId(dose.key),
+      scheduledDate: tz.TZDateTime.from(snoozedAt.toUtc(), tz.UTC),
+      notificationDetails: details,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      title: 'Es hora de tu medicamento',
+      body: '$medicationName • Pospuesto 10 min',
+      payload: '$_dosePayloadPrefix${dose.key}',
+    );
+    await AppDatabase.instance.createNotificationLog({
+      'event_key': null,
+      'title': 'Recordatorio pospuesto',
+      'body': '$medicationName • Nuevo aviso: ${_formatTime(snoozedAt)}',
+      'kind': 'action_snoozed',
+      'medication_form': medicationForm,
+      'scheduled_at': snoozedAt.toIso8601String(),
+      'payload': '$_dosePayloadPrefix${dose.key}',
+    });
+    historyChangeToken.value++;
+  }
+
+  Future<Map<String, Object?>?> _findMedicationById(int medicationId) async {
+    final medications = await AppDatabase.instance.getMedications();
+    for (final medication in medications) {
+      if (medication['id'] == medicationId) {
+        return medication;
+      }
+    }
+    return null;
+  }
+
+  Future<bool> _isDoseAlreadyTaken(_DosePayloadData dose) async {
+    final takenLogs = await AppDatabase.instance.getDoseLogs(status: 'taken');
+    final targetScheduledAt = dose.scheduledAt.toIso8601String();
+    for (final log in takenLogs) {
+      final medicationId = log['medication_id'];
+      final scheduledAtRaw = log['scheduled_at']?.toString();
+      if (medicationId is! int || scheduledAtRaw == null) continue;
+      if (medicationId != dose.medicationId) continue;
+      if (scheduledAtRaw == targetScheduledAt) return true;
+    }
+    return false;
   }
 
   String _formatDateTime(DateTime value) {
@@ -682,4 +835,46 @@ class NotificationsService {
         (medication['reminder_vibration'] as num?)?.toInt() ?? 0;
     return reminderMinutes > 0 || reminderSound == 1 || reminderVibration == 1;
   }
+
+  _DosePayloadData? _parseDoseKey(String value) {
+    final trimmed = value.trim();
+    final separator = trimmed.indexOf('_');
+    if (separator <= 0 || separator >= trimmed.length - 1) return null;
+
+    final medicationId = int.tryParse(trimmed.substring(0, separator));
+    if (medicationId == null) return null;
+    final scheduledAt = _parseDoseDateTime(trimmed.substring(separator + 1));
+    if (scheduledAt == null) return null;
+
+    return _DosePayloadData(
+      key: trimmed,
+      medicationId: medicationId,
+      scheduledAt: scheduledAt,
+    );
+  }
+
+  DateTime? _parseDoseDateTime(String value) {
+    final match = RegExp(
+      r'^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$',
+    ).firstMatch(value.trim());
+    if (match == null) return null;
+    final year = int.parse(match.group(1)!);
+    final month = int.parse(match.group(2)!);
+    final day = int.parse(match.group(3)!);
+    final hour = int.parse(match.group(4)!);
+    final minute = int.parse(match.group(5)!);
+    return DateTime(year, month, day, hour, minute);
+  }
+}
+
+class _DosePayloadData {
+  const _DosePayloadData({
+    required this.key,
+    required this.medicationId,
+    required this.scheduledAt,
+  });
+
+  final String key;
+  final int medicationId;
+  final DateTime scheduledAt;
 }

@@ -9,6 +9,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 import 'package:mis_medicamentos/services/ai_chat_service.dart';
+import 'package:mis_medicamentos/services/connectivity_service.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -181,6 +182,7 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
+          backgroundColor: Colors.white,
           title: Text(
             title,
             style: const TextStyle(fontWeight: FontWeight.w700),
@@ -202,6 +204,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _signInWithGoogle() async {
     if (_isSigningIn) return;
+
+    final hasInternet = await ConnectivityService.instance
+        .hasInternetConnection();
+    if (!hasInternet) {
+      if (!mounted) return;
+      await _showStatusDialog(
+        title: 'Sin conexión',
+        message:
+            'No hay conexión a internet. Verifica tu red e inténtalo de nuevo.',
+      );
+      return;
+    }
+
     setState(() => _isSigningIn = true);
     try {
       final googleUser = await GoogleSignIn.instance.authenticate();
@@ -382,10 +397,19 @@ class _ChatScreenState extends State<ChatScreen> {
     _controller.clear();
     setState(() {
       _messages.add(_ChatMessage(text: text, fromUser: true));
-      _isSending = true;
     });
     _scrollToBottom();
 
+    final hasInternet = await ConnectivityService.instance
+        .hasInternetConnection();
+    if (!hasInternet) {
+      _appendAssistantNotice(
+        'No hay conexión a internet. Conéctate para que pueda responderte.',
+      );
+      return;
+    }
+
+    setState(() => _isSending = true);
     try {
       final reply = await AiChatService.instance.sendMessage(text);
       if (!mounted) return;
@@ -461,6 +485,7 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
+          backgroundColor: Colors.white,
           title: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -506,6 +531,7 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
+          backgroundColor: Colors.white,
           title: const Text(
             'Uso del asistente',
             style: TextStyle(fontWeight: FontWeight.w700),
@@ -1051,7 +1077,7 @@ class _AssistantMessageTile extends StatelessWidget {
                 onPressed: onAudioTap,
                 icon: Icon(
                   isSpeaking ? Icons.stop_circle_outlined : Icons.volume_up,
-                  color: const Color(0xFF000000).withValues(alpha: 0.75),
+                  color: const Color(0xFF1A1A1A).withValues(alpha: 0.75),
                   size: 20,
                 ),
                 visualDensity: VisualDensity.compact,

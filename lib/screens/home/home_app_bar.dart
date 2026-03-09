@@ -39,11 +39,22 @@ class HomeAppBar extends StatelessWidget implements PreferredSizeWidget {
               CircleAvatar(
                 radius: 22,
                 backgroundColor: const Color(0xFFDCE8FF),
-                backgroundImage: hasPhoto
-                    ? NetworkImage(user!.photoURL!)
-                    : null,
                 child: hasPhoto
-                    ? null
+                    ? ClipOval(
+                        child: Image.network(
+                          user!.photoURL!,
+                          width: 44,
+                          height: 44,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) {
+                            return const Icon(
+                              Icons.person,
+                              size: 24,
+                              color: Colors.blue,
+                            );
+                          },
+                        ),
+                      )
                     : const Icon(Icons.person, size: 24, color: Colors.blue),
               ),
               const SizedBox(width: 12),
