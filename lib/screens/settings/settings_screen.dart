@@ -11,6 +11,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:mis_medicamentos/services/ai_chat_service.dart';
 import 'package:mis_medicamentos/services/connectivity_service.dart';
 import 'package:mis_medicamentos/services/notifications_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -21,6 +22,10 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   static const _appVersionLabel = '1.0.0+6002';
+  static const _privacyPolicyUrl =
+      'https://kirbynx64.github.io/Mis-Medicamentos/privacy-policy.html';
+  static const _aiTermsUrl =
+      'https://kirbynx64.github.io/Mis-Medicamentos/ai-terms-of-use.html';
   bool _isSigningIn = false;
   bool _isSyncingData = false;
   bool _isSigningOut = false;
@@ -62,6 +67,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         );
       },
+    );
+  }
+
+  Future<void> _openLegalPage({
+    required String url,
+    required String label,
+  }) async {
+    final opened = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!mounted || opened) return;
+    await _showStatusDialog(
+      title: 'No se pudo abrir',
+      message: 'No se pudo abrir $label en el navegador.',
     );
   }
 
@@ -1533,6 +1553,111 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   ),
                           ),
                         ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Legal',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.1,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF6F9FE),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: const Color(0xFFE3EBF6)),
+                    ),
+                    child: Column(
+                      children: [
+                        ListTile(
+                          onTap: () => _openLegalPage(
+                            url: _privacyPolicyUrl,
+                            label: 'la política de privacidad',
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          leading: Container(
+                            width: 58,
+                            height: 58,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFDCE8F8),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: const Icon(
+                              Icons.privacy_tip_outlined,
+                              color: Color(0xFF2F80ED),
+                              size: 31,
+                            ),
+                          ),
+                          title: const Text(
+                            'Política de privacidad',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: const Text(
+                            'Abrir documento oficial en el navegador.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF5F7190),
+                            ),
+                          ),
+                          trailing: const Icon(
+                            Icons.open_in_new_rounded,
+                            color: Color(0xFF98A4BA),
+                            size: 24,
+                          ),
+                        ),
+                        const Divider(height: 1, color: Color(0xFFE2E8F0)),
+                        ListTile(
+                          onTap: () => _openLegalPage(
+                            url: _aiTermsUrl,
+                            label: 'los términos de uso de IA',
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          leading: Container(
+                            width: 58,
+                            height: 58,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFDCE8F8),
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: const Icon(
+                              Icons.description_outlined,
+                              color: Color(0xFF2F80ED),
+                              size: 31,
+                            ),
+                          ),
+                          title: const Text(
+                            'Términos de IA',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: const Text(
+                            'Abrir términos de uso del asistente IA.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF5F7190),
+                            ),
+                          ),
+                          trailing: const Icon(
+                            Icons.open_in_new_rounded,
+                            color: Color(0xFF98A4BA),
+                            size: 24,
+                          ),
+                        ),
                       ],
                     ),
                   ),

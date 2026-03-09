@@ -10,6 +10,8 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 import 'package:mis_medicamentos/services/ai_chat_service.dart';
 import 'package:mis_medicamentos/services/connectivity_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -20,6 +22,9 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   static const int _maxAllowedMessages = 30;
+  static const String _aiTermsAcceptedKey = 'ai_terms_accepted';
+  static const String _aiTermsUrl =
+      'https://kirbynx64.github.io/Mis-Medicamentos/ai-terms-of-use.html';
   static const List<String> _welcomeOptions = [
     'Hola, soy tu asistente. Puedes escribirme algo como: "Agéndame paracetamol cada 8 horas".',
     '¡Hola! Estoy aquí para ayudarte con tus medicamentos. Ejemplo: "Recuérdame ibuprofeno cada 12 horas".',
@@ -64,20 +69,19 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isSending = false;
   bool _isSigningIn = false;
   bool _isLoadingAccess = true;
+  bool _isLoadingAiTerms = true;
+  bool _isAiTermsAccepted = false;
   bool _isPersonalApiKeyActive = false;
   int _messagesUsed = 0;
   int _messageLimit = _maxAllowedMessages;
   int? _speakingAssistantIndex;
   int _assistantAudioToken = 0;
   StreamSubscription<User?>? _authSubscription;
-  late final List<_ChatMessage> _messages;
+  final List<_ChatMessage> _messages = [];
 
   @override
   void initState() {
     super.initState();
-    final welcome = _welcomeOptions[Random().nextInt(_welcomeOptions.length)]
-        .trim();
-    _messages = [_ChatMessage(text: welcome, fromUser: false)];
     _configureTts();
     _bootstrapChatAccess();
   }
@@ -93,11 +97,66 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _bootstrapChatAccess() async {
+    await _loadAiTermsAcceptance();
     await _refreshApiStatus();
     _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
       _onAuthChanged(user);
     });
     await _onAuthChanged(FirebaseAuth.instance.currentUser);
+  }
+
+  Future<void> _loadAiTermsAcceptance() async {
+    final prefs = await SharedPreferences.getInstance();
+    final accepted = prefs.getBool(_aiTermsAcceptedKey) ?? false;
+    if (!mounted) return;
+    setState(() {
+      _isAiTermsAccepted = accepted;
+      _isLoadingAiTerms = false;
+      if (_messages.isEmpty) {
+        _messages.add(_initialAssistantMessage(accepted));
+      }
+    });
+    _scrollToBottom();
+  }
+
+  _ChatMessage _initialAssistantMessage(bool termsAccepted) {
+    if (!termsAccepted) {
+      return const _ChatMessage(
+        text:
+            'Antes de usar el Asistente IA, debes aceptar los Términos de Uso de IA.\n'
+            'Revisa el documento y luego toca "Acepto los términos".',
+        fromUser: false,
+        isAiTermsPrompt: true,
+      );
+    }
+    final welcome = _welcomeOptions[Random().nextInt(_welcomeOptions.length)]
+        .trim();
+    return _ChatMessage(text: welcome, fromUser: false);
+  }
+
+  Future<void> _openAiTermsInBrowser() async {
+    final opened = await launchUrl(
+      Uri.parse(_aiTermsUrl),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!mounted || opened) return;
+    await _showStatusDialog(
+      title: 'No se pudo abrir',
+      message: 'No se pudo abrir el navegador para mostrar los términos.',
+    );
+  }
+
+  Future<void> _acceptAiTerms() async {
+    if (_isAiTermsAccepted) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_aiTermsAcceptedKey, true);
+    if (!mounted) return;
+    setState(() {
+      _isAiTermsAccepted = true;
+      _messages.removeWhere((message) => message.isAiTermsPrompt);
+      _messages.add(_initialAssistantMessage(true));
+    });
+    _scrollToBottom();
   }
 
   Future<void> _onAuthChanged(User? user) async {
@@ -370,6 +429,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _sendMessage() async {
     if (_isSending) return;
+    if (!_isAiTermsAccepted) {
+      _appendAssistantNotice(
+        'Para usar el chat, primero acepta los Términos de Uso de IA.',
+      );
+      return;
+    }
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       await _showStatusDialog(
@@ -610,6 +675,11 @@ class _ChatScreenState extends State<ChatScreen> {
           stream: FirebaseAuth.instance.authStateChanges(),
           builder: (context, snapshot) {
             final user = snapshot.data;
+            if (_isLoadingAiTerms) {
+              return const Center(
+                child: CircularProgressIndicator(color: Color(0xFF2F80ED)),
+              );
+            }
             if (user != null && _isLoadingAccess) {
               return const Center(
                 child: CircularProgressIndicator(color: Color(0xFF2F80ED)),
@@ -710,6 +780,11 @@ class _ChatScreenState extends State<ChatScreen> {
                           isSpeaking: _speakingAssistantIndex == index,
                           onAudioTap: () =>
                               _toggleAssistantAudio(index, message.text),
+                          onOpenAiTerms: message.isAiTermsPrompt
+                              ? _openAiTermsInBrowser
+                              : null,
+                          onAcceptAiTerms:
+                              message.isAiTermsPrompt ? _acceptAiTerms : null,
                         );
                       }
                       return Align(
@@ -745,6 +820,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       Expanded(
                         child: TextField(
                           controller: _controller,
+                          enabled: _isAiTermsAccepted,
                           textCapitalization: TextCapitalization.sentences,
                           keyboardType: TextInputType.multiline,
                           textInputAction: TextInputAction.newline,
@@ -752,7 +828,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           minLines: 1,
                           maxLines: 4,
                           decoration: InputDecoration(
-                            hintText: 'Escribe un mensaje...',
+                            hintText: _isAiTermsAccepted
+                                ? 'Escribe un mensaje...'
+                                : 'Acepta los términos de IA para continuar...',
                             filled: true,
                             fillColor: const Color(0xFFF2F5FA),
                             border: OutlineInputBorder(
@@ -770,7 +848,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       FilledButton(
                         onPressed: _isSending
                             ? null
-                            : (user == null ? () {} : _sendMessage),
+                            : (!_isAiTermsAccepted
+                                  ? _openAiTermsInBrowser
+                                  : (user == null ? () {} : _sendMessage)),
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFF2F80ED),
                           shape: RoundedRectangleBorder(
@@ -784,7 +864,9 @@ class _ChatScreenState extends State<ChatScreen> {
                         child: Icon(
                           user == null
                               ? Icons.lock_rounded
-                              : Icons.send_rounded,
+                              : (_isAiTermsAccepted
+                                    ? Icons.send_rounded
+                                    : Icons.description_outlined),
                           color: Colors.white,
                         ),
                       ),
@@ -801,10 +883,15 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 class _ChatMessage {
-  const _ChatMessage({required this.text, required this.fromUser});
+  const _ChatMessage({
+    required this.text,
+    required this.fromUser,
+    this.isAiTermsPrompt = false,
+  });
 
   final String text;
   final bool fromUser;
+  final bool isAiTermsPrompt;
 }
 
 class _MessageText extends StatelessWidget {
@@ -1018,11 +1105,15 @@ class _AssistantMessageTile extends StatelessWidget {
     required this.message,
     required this.isSpeaking,
     required this.onAudioTap,
+    this.onOpenAiTerms,
+    this.onAcceptAiTerms,
   });
 
   final _ChatMessage message;
   final bool isSpeaking;
   final VoidCallback onAudioTap;
+  final VoidCallback? onOpenAiTerms;
+  final VoidCallback? onAcceptAiTerms;
 
   @override
   Widget build(BuildContext context) {
@@ -1071,19 +1162,45 @@ class _AssistantMessageTile extends StatelessWidget {
                 ),
                 child: _MessageText(message: message),
               ),
-              const SizedBox(height: 4),
-              IconButton(
-                tooltip: isSpeaking ? 'Detener audio' : 'Escuchar audio',
-                onPressed: onAudioTap,
-                icon: Icon(
-                  isSpeaking ? Icons.stop_circle_outlined : Icons.volume_up,
-                  color: const Color(0xFF1A1A1A).withValues(alpha: 0.75),
-                  size: 20,
+              if (message.isAiTermsPrompt) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: onOpenAiTerms,
+                      icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                      label: const Text('Ver términos'),
+                    ),
+                    FilledButton(
+                      onPressed: onAcceptAiTerms,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF2F80ED),
+                      ),
+                      child: const Text('Acepto los términos'),
+                    ),
+                  ],
                 ),
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.all(6),
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              ),
+              ],
+              if (!message.isAiTermsPrompt) ...[
+                const SizedBox(height: 4),
+                IconButton(
+                  tooltip: isSpeaking ? 'Detener audio' : 'Escuchar audio',
+                  onPressed: onAudioTap,
+                  icon: Icon(
+                    isSpeaking ? Icons.stop_circle_outlined : Icons.volume_up,
+                    color: const Color(0xFF1A1A1A).withValues(alpha: 0.75),
+                    size: 20,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.all(6),
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

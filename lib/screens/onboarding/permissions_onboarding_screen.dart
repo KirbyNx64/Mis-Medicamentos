@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mis_medicamentos/services/notifications_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class PermissionsOnboardingScreen extends StatefulWidget {
   const PermissionsOnboardingScreen({super.key, required this.onContinue});
@@ -15,18 +16,37 @@ class PermissionsOnboardingScreen extends StatefulWidget {
 
 class _PermissionsOnboardingScreenState
     extends State<PermissionsOnboardingScreen> {
+  static const _privacyPolicyUrl =
+      'https://kirbynx64.github.io/Mis-Medicamentos/privacy-policy.html';
+
   bool _isRequestingNotifications = false;
   bool _isRequestingAlarms = false;
   bool? _notificationsGranted;
   bool? _alarmsGranted;
   bool _isContinuing = false;
+  bool _privacyAccepted = false;
 
   bool get _isAndroid =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   bool get _canContinue {
-    if (!_isAndroid) return true;
-    return _notificationsGranted != null && _alarmsGranted != null;
+    final permissionsCompleted =
+        !_isAndroid ||
+        (_notificationsGranted != null && _alarmsGranted != null);
+    return permissionsCompleted && _privacyAccepted;
+  }
+
+  Future<void> _openPrivacyPolicy() async {
+    final uri = Uri.parse(_privacyPolicyUrl);
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!mounted) return;
+    if (!opened) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo abrir la política de privacidad'),
+        ),
+      );
+    }
   }
 
   Future<void> _requestNotificationsPermission() async {
@@ -103,7 +123,7 @@ class _PermissionsOnboardingScreenState
   }) {
     final shouldShowAllowButton = granted != true;
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: const Color(0xFFF7FAFF),
         borderRadius: BorderRadius.circular(16),
@@ -113,23 +133,25 @@ class _PermissionsOnboardingScreenState
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            width: 50,
-            height: 50,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
               color: const Color(0xFFDCE8F8),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(icon, color: const Color(0xFF2F80ED), size: 28),
+            child: Icon(icon, color: const Color(0xFF2F80ED), size: 24),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 16,
+                    fontSize: 15,
                     fontWeight: FontWeight.w800,
                     color: Color(0xFF1A2740),
                   ),
@@ -138,34 +160,34 @@ class _PermissionsOnboardingScreenState
                 Text(
                   subtitle,
                   style: const TextStyle(
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w500,
                     color: Color(0xFF5F7190),
                   ),
                 ),
-                if (granted != null) ...[
-                  const SizedBox(height: 8),
-                  _statusChip(granted),
-                ],
               ],
             ),
           ),
-          if (shouldShowAllowButton) ...[
-            const SizedBox(width: 8),
+          const SizedBox(width: 6),
+          if (shouldShowAllowButton)
             FilledButton(
               onPressed: isLoading ? null : onTap,
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF2F80ED),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 12,
+                  horizontal: 12,
+                  vertical: 10,
                 ),
-                minimumSize: const Size(110, 46),
+                minimumSize: const Size(86, 40),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                textStyle: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                ),
               ),
               child: isLoading
                   ? const SizedBox(
@@ -177,8 +199,9 @@ class _PermissionsOnboardingScreenState
                       ),
                     )
                   : const Text('Permitir'),
-            ),
-          ],
+            )
+          else
+            _statusChip(granted),
         ],
       ),
     );
@@ -216,12 +239,12 @@ class _PermissionsOnboardingScreenState
               child: Column(
                 children: [
                   Container(
-                    width: 92,
-                    height: 92,
+                    width: 100,
+                    height: 100,
                     decoration: BoxDecoration(
                       color: Colors.white,
                       shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white70, width: 3),
+                      border: Border.all(color: Colors.white70, width: 1),
                     ),
                     child: Padding(
                       padding: const EdgeInsets.all(12),
@@ -241,13 +264,6 @@ class _PermissionsOnboardingScreenState
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(22),
                       border: Border.all(color: const Color(0xFFE1EAF7)),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x140E386B),
-                          blurRadius: 20,
-                          offset: Offset(0, 8),
-                        ),
-                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -291,6 +307,72 @@ class _PermissionsOnboardingScreenState
                           onTap: _isAndroid ? _requestAlarmsPermission : null,
                           granted: _alarmsGranted,
                         ),
+                        const SizedBox(height: 14),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF7FAFF),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFFDDE7F5)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Transform.translate(
+                                    offset: const Offset(-4, -4),
+                                    child: Checkbox(
+                                      activeColor: Color(0xFF2F80ED),
+                                      value: _privacyAccepted,
+                                      onChanged: (value) {
+                                        setState(
+                                          () =>
+                                              _privacyAccepted = value ?? false,
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                  const Expanded(
+                                    child: Padding(
+                                      padding: EdgeInsets.only(top: 2),
+                                      child: Text(
+                                        'Acepto la Política de Privacidad para continuar.',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF1A2740),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Row(
+                                children: [
+                                  const Expanded(child: SizedBox.shrink()),
+                                  OutlinedButton.icon(
+                                    onPressed: _openPrivacyPolicy,
+                                    icon: const Icon(
+                                      Icons.privacy_tip_outlined,
+                                      size: 18,
+                                    ),
+                                    label: const Text('Ver política'),
+                                    style: OutlinedButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
+                                      side: const BorderSide(
+                                        color: Color(0xFF2F80ED),
+                                      ),
+                                      foregroundColor: const Color(0xFF2F80ED),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
                         const SizedBox(height: 18),
                         SizedBox(
                           width: double.infinity,
@@ -321,7 +403,7 @@ class _PermissionsOnboardingScreenState
                                 : Text(
                                     _canContinue
                                         ? 'Continuar'
-                                        : 'Conceder permisos',
+                                        : 'Completa permisos y aceptación',
                                   ),
                           ),
                         ),
