@@ -613,14 +613,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "9.3.0"
-  open_settings_plus:
-    dependency: "direct main"
-    description:
-      name: open_settings_plus
-      sha256: "17c5d1c90affd224b0c19ee3dc5bbcff39b630889a90912ba1441c7e821fa914"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.4.2"
   path:
     dependency: "direct main"
     description:

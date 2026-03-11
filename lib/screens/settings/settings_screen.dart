@@ -794,11 +794,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return AlertDialog(
           backgroundColor: Colors.white,
           title: const Text(
-            'Eliminar datos de la nube',
+            'Eliminar datos de la nube y cuenta',
             style: TextStyle(fontWeight: FontWeight.w700),
           ),
           content: const Text(
-            'Se eliminara tu respaldo en la nube (medicamentos, horarios, tomas e historial). Esta accion no se puede deshacer.',
+            'Se eliminará tu respaldo en la nube (medicamentos, horarios, tomas e historial) y también tu cuenta. Esta acción no se puede deshacer.',
           ),
           actions: [
             TextButton(
@@ -841,7 +841,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (user == null) {
       await _showStatusDialog(
         title: 'Inicia sesión',
-        message: 'Debes iniciar sesión para borrar datos de Firestore.',
+        message:
+            'Debes iniciar sesión para borrar tus datos de Firestore y tu cuenta.',
       );
       return;
     }
@@ -878,18 +879,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await deleteCollection(syncRef.collection('notification_logs'));
       await syncRef.delete();
       await userRef.delete();
+      await user.delete();
 
       if (!mounted) return;
       setState(() => _lastSyncAt = null);
       await _showStatusDialog(
         title: 'Datos eliminados',
-        message: 'Tus datos en la nube fueron eliminados.',
+        message: 'Tus datos en la nube y tu cuenta fueron eliminados.',
       );
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) return;
+      final requiresRecentLogin =
+          error.code == 'requires-recent-login' ||
+          error.code == 'credential-too-old-login-again';
+      final message = requiresRecentLogin
+          ? 'Para eliminar la cuenta debes volver a iniciar sesión e intentarlo de nuevo.'
+          : 'No se pudo eliminar tu cuenta: ${error.message ?? error.code}';
+      await _showStatusDialog(title: 'Error', message: message);
     } catch (error) {
       if (!mounted) return;
       await _showStatusDialog(
         title: 'Error',
-        message: 'No se pudieron eliminar tus datos en la nube: $error',
+        message: 'No se pudieron eliminar tus datos en la nube y cuenta: $error',
       );
     } finally {
       if (mounted) {
@@ -1530,7 +1541,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             ),
                             subtitle: const Text(
-                              'Borra el respaldo de tu cuenta en la nube.',
+                              'Borra el respaldo en la nube y elimina tu cuenta.',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w500,
